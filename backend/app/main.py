@@ -80,7 +80,6 @@ async def root():
 
 # ── Simple top-level route ────────────────────────────────────────────────────
 import asyncio
-import functools
 from fastapi import UploadFile
 
 @app.post(
@@ -104,30 +103,37 @@ async def analyze_contour_simple(file: UploadFile):
     Simple single-file endpoint — no extra parameters needed.
     """
     file_bytes = await file.read()
+    filename   = file.filename or "upload.kml"
 
-    # _analyze_contour contains CPU-bound and blocking I/O (scipy, pysheds,
-    # subprocess.run). Running it directly in an async function would freeze
-    # the event loop, making the server unresponsive to ALL other requests
-    # (health checks, docs, etc.) for the entire 2-4 minute analysis window.
+    # _analyze_contour is a coroutine that contains CPU-bound + blocking I/O
+    # (scipy, pysheds, subprocess.run). Running it directly on the uvicorn
+    # event loop would freeze the server — no other request can be served
+    # until it finishes (2-4 min).
     #
-    # asyncio.to_thread() moves the work to a thread-pool worker so the event
-    # loop stays free to handle other requests while analysis is in progress.
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None,  # default ThreadPoolExecutor
-        functools.partial(
-            asyncio.run,
-            _analyze_contour(
-                file_bytes=file_bytes,
-                filename=file.filename or "upload.kml",
-                grid_resolution=200,
-                drainage_threshold_pct=2.0,
-                drainage_buffer_cells=2,
-                snap_radius_cells=5,
-                skip_osm=False,
-            ),
-        ),
-    )
+    # We run it in a thread-pool worker with its OWN event loop so:
+    #   1. The uvicorn event loop stays free → other devices can still load pages.
+    #   2. We avoid conflicts with uvloop (asyncio.run in a plain thread creates
+    #      a standard asyncio loop, not uvloop, which is safe).
+    def _run_in_thread():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(
+                _analyze_contour(
+                    file_bytes=file_bytes,
+                    filename=filename,
+                    grid_resolution=100,       # 100×100 grid (lab-machine-friendly)
+                    drainage_threshold_pct=2.0,
+                    drainage_buffer_cells=2,
+                    snap_radius_cells=5,
+                    skip_osm=False,
+                )
+            )
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    result = await asyncio.to_thread(_run_in_thread)
 
     # Best candidate
     candidates = result.get("top_candidates", [])
