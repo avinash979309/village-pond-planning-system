@@ -217,6 +217,9 @@ def delineate_catchment(
         "pour_lat":      pour_point.lat,
         "elev_grid":     elev_grid.tolist(),
         "utm_epsg":      utm_epsg,
+        # Pass pre-computed flow direction so the worker skips the
+        # expensive fill_pits/fill_depressions/resolve_flats/flowdir steps.
+        "fdir_arr":      flow_direction_arr.tolist(),
     })
 
     worker_path = str(_pathlib.Path(__file__).with_name("_delineate_worker.py"))
@@ -226,7 +229,7 @@ def delineate_catchment(
         input=payload,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=300,  # 5 min — generous for slow lab machines
     )
 
     if proc.returncode != 0 and not proc.stdout.strip():

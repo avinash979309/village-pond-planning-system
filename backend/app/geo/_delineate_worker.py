@@ -47,6 +47,8 @@ def main() -> None:
     pour_lat      = float(payload["pour_lat"])
     elev_grid     = np.array(payload["elev_grid"], dtype=np.float64)
     utm_epsg      = int(payload["utm_epsg"])
+    # Pre-computed flow direction from parent process (skips the heavy pipeline).
+    fdir_arr_raw  = payload.get("fdir_arr")
 
     # ── NumPy 2.x compat shim ─────────────────────────────────────────────────
     if not hasattr(np, "in1d"):
@@ -62,13 +64,25 @@ def main() -> None:
         from shapely.ops import transform, unary_union
         from pyproj import CRS, Transformer
 
-        # Fresh Grid per subprocess — no heap corruption possible
-        grid     = PyshedsGrid.from_raster(temp_dem_path)
-        dem      = grid.read_raster(temp_dem_path)
-        filled   = grid.fill_pits(dem)
-        flooded  = grid.fill_depressions(filled)
-        inflated = grid.resolve_flats(flooded)
-        fdir     = grid.flowdir(inflated)
+        # Fresh Grid per subprocess — no heap corruption possible.
+        grid = PyshedsGrid.from_raster(temp_dem_path)
+
+        if fdir_arr_raw is not None:
+            # Fast path: use the flow direction already computed by the main
+            # process. Skip fill_pits / fill_depressions / resolve_flats /
+            # flowdir — these are the four slow steps.
+            dem   = grid.read_raster(temp_dem_path)
+            fdir_np = np.array(fdir_arr_raw, dtype=np.int64)
+            # Wrap the numpy array in a pysheds Raster so grid.catchment accepts it
+            from pysheds.sview import Raster as PyshedsRaster
+            fdir = PyshedsRaster(fdir_np, viewfinder=dem.viewfinder)
+        else:
+            # Slow fallback path (no pre-computed fdir supplied).
+            dem      = grid.read_raster(temp_dem_path)
+            filled   = grid.fill_pits(dem)
+            flooded  = grid.fill_depressions(filled)
+            inflated = grid.resolve_flats(flooded)
+            fdir     = grid.flowdir(inflated)
 
         catch     = grid.catchment(x=pour_lon, y=pour_lat, fdir=fdir, xytype="coordinate")
         catch_arr = np.array(catch).astype(np.uint8)
