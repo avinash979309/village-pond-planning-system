@@ -190,10 +190,6 @@ async def analyze_contour_simple(file: UploadFile):
         },
         # ── All candidates — each with pour_point + catchment polygon ─────────
         "all_candidates": all_candidates_full,
-        # ── Pre-built colored FeatureCollection (drag into geojson.io) ────────
-        # Contains all catchment polygons, pond points, and pour points for
-        # all ranked candidates, already styled with SimpleStyle colors.
-        "geojson": result.get("colored_geojson"),
         "osm_water_exclusion": result.get("osm_water_exclusion", {}),
     }
 
