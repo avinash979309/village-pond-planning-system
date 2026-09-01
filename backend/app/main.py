@@ -135,45 +135,65 @@ async def analyze_contour_simple(file: UploadFile):
 
     result = await asyncio.to_thread(_run_in_thread)
 
-    # Best candidate
+    # All candidates (service already delineated catchment for each one)
     candidates = result.get("top_candidates", [])
     best = candidates[0] if candidates else {}
-    pond_props = best.get("pond_candidate", {}).get("properties", {})
+    pond_props  = best.get("pond_candidate", {}).get("properties", {})
     pond_coords = best.get("pond_candidate", {}).get("geometry", {}).get("coordinates", [])
     catchment_props = best.get("catchment", {}).get("properties", {})
     pour_coords = best.get("pour_point", {}).get("geometry", {}).get("coordinates", [])
 
+    # Build a per-candidate list that includes pour_point + catchment polygon
+    # for every ranked candidate, not just rank 1.
+    all_candidates_full = []
+    for c in candidates:
+        c_coords  = c["pond_candidate"]["geometry"]["coordinates"]
+        c_props   = c["pond_candidate"]["properties"]
+        pp_coords = c["pour_point"]["geometry"]["coordinates"]
+        cat_props = c["catchment"]["properties"]
+        all_candidates_full.append({
+            "rank":              c["rank"],
+            "longitude":         c_coords[0],
+            "latitude":          c_coords[1],
+            "elevation_m":       c_props.get("elevation_m"),
+            "suitability_score": c_props.get("suitability_score"),
+            "pour_point": {
+                "longitude": pp_coords[0],
+                "latitude":  pp_coords[1],
+            },
+            "catchment": {
+                "area_km2":        cat_props.get("area_sq_km") or cat_props.get("area_km2"),
+                "area_m2":         cat_props.get("area_sq_m"),
+                "avg_elevation_m": cat_props.get("avg_elevation_m"),
+                "boundary_geojson": c["catchment"].get("geometry"),
+            },
+        })
+
     return {
         "status": "success",
+        # ── Rank-1 summary (backward compat) ──────────────────────────────────
         "pond_location": {
-            "longitude": pond_coords[0] if pond_coords else None,
-            "latitude": pond_coords[1] if pond_coords else None,
-            "elevation_m": pond_props.get("elevation_m"),
-            "suitability_score": pond_props.get("suitability_score"),
+            "longitude":        pond_coords[0] if pond_coords else None,
+            "latitude":         pond_coords[1] if pond_coords else None,
+            "elevation_m":      pond_props.get("elevation_m"),
+            "suitability_score":pond_props.get("suitability_score"),
         },
         "pour_point": {
             "longitude": pour_coords[0] if pour_coords else None,
-            "latitude": pour_coords[1] if pour_coords else None,
+            "latitude":  pour_coords[1] if pour_coords else None,
         },
         "catchment": {
-            "area_km2": catchment_props.get("area_km2") or catchment_props.get("area_sq_km"),
-            "area_m2": catchment_props.get("area_sq_m"),
+            "area_km2":        catchment_props.get("area_sq_km") or catchment_props.get("area_km2"),
+            "area_m2":         catchment_props.get("area_sq_m"),
             "avg_elevation_m": catchment_props.get("avg_elevation_m"),
-            "boundary_geojson": best.get("catchment", {}).get("geometry"),
+            "boundary_geojson":best.get("catchment", {}).get("geometry"),
         },
-        "all_candidates": [
-            {
-                "rank": c["rank"],
-                "longitude": c["pond_candidate"]["geometry"]["coordinates"][0],
-                "latitude": c["pond_candidate"]["geometry"]["coordinates"][1],
-                "suitability_score": c["pond_candidate"]["properties"].get("suitability_score"),
-                "catchment_area_km2": (
-                    c["catchment"]["properties"].get("area_km2")
-                    or c["catchment"]["properties"].get("area_sq_km")
-                ),
-            }
-            for c in candidates
-        ],
+        # ── All candidates — each with pour_point + catchment polygon ─────────
+        "all_candidates": all_candidates_full,
+        # ── Pre-built colored FeatureCollection (drag into geojson.io) ────────
+        # Contains all catchment polygons, pond points, and pour points for
+        # all ranked candidates, already styled with SimpleStyle colors.
+        "geojson": result.get("colored_geojson"),
         "osm_water_exclusion": result.get("osm_water_exclusion", {}),
     }
 
