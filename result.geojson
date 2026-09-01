@@ -1,0 +1,169 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          81.2944482,
+          21.2439207
+        ]
+      },
+      "properties": {
+        "rank": 1,
+        "feature_type": "pond_site",
+        "suitability_score": 0.8822,
+        "catchment_area_km2": 0.0139,
+        "marker-color": "#2ecc71",
+        "marker-size": "large",
+        "marker-symbol": "water",
+        "title": "Rank 1 Pond Site"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          81.2822637,
+          21.2527113
+        ]
+      },
+      "properties": {
+        "rank": 2,
+        "feature_type": "pond_site",
+        "suitability_score": 0.88,
+        "catchment_area_km2": 0.0004,
+        "marker-color": "#e67e22",
+        "marker-size": "large",
+        "marker-symbol": "water",
+        "title": "Rank 2 Pond Site"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              81.29452629089357,
+              21.24516803921206
+            ],
+            [
+              81.29452629089357,
+              21.24504924819265
+            ],
+            [
+              81.29437007904055,
+              21.24504924819265
+            ],
+            [
+              81.29437007904055,
+              21.244930457173243
+            ],
+            [
+              81.29405765533448,
+              21.244930457173243
+            ],
+            [
+              81.29405765533448,
+              21.24457408411502
+            ],
+            [
+              81.29421386718751,
+              21.24457408411502
+            ],
+            [
+              81.29421386718751,
+              21.24386133799857
+            ],
+            [
+              81.29437007904055,
+              21.24386133799857
+            ],
+            [
+              81.29437007904055,
+              21.243742546979163
+            ],
+            [
+              81.29452629089357,
+              21.243742546979163
+            ],
+            [
+              81.29452629089357,
+              21.243623755959756
+            ],
+            [
+              81.2946825027466,
+              21.243623755959756
+            ],
+            [
+              81.2946825027466,
+              21.243504964940346
+            ],
+            [
+              81.29483871459962,
+              21.243504964940346
+            ],
+            [
+              81.29483871459962,
+              21.243148591882125
+            ],
+            [
+              81.29499492645265,
+              21.243148591882125
+            ],
+            [
+              81.29499492645265,
+              21.244930457173243
+            ],
+            [
+              81.29483871459962,
+              21.244930457173243
+            ],
+            [
+              81.29483871459962,
+              21.24516803921206
+            ],
+            [
+              81.29452629089357,
+              21.24516803921206
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "rank": 1,
+        "feature_type": "catchment",
+        "area_km2": 0.0139,
+        "area_m2": 13851.6,
+        "avg_elevation_m": 283.16,
+        "stroke": "#2ecc71",
+        "stroke-width": 2,
+        "fill": "#2ecc71",
+        "fill-opacity": 0.15,
+        "title": "Rank 1 Catchment Area"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          81.2949168,
+          21.2433268
+        ]
+      },
+      "properties": {
+        "rank": 1,
+        "feature_type": "pour_point",
+        "marker-color": "#1a8a4e",
+        "marker-size": "medium",
+        "marker-symbol": "circle",
+        "title": "Pour Point (Catchment Outlet)"
+      }
+    }
+  ]
+}
