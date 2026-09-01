@@ -34,9 +34,16 @@ Output (stdout): JSON with keys on failure:
 from __future__ import annotations
 
 import json
+import signal
 import sys
 
 import numpy as np
+
+# Ignore SIGINT so the worker is not killed if the parent process receives
+# Ctrl+C. The parent uses start_new_session=True to isolate process groups,
+# but this is a belt-and-suspenders guard for environments where that fails
+# (e.g. conda launchers that re-join the terminal session).
+signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 def main() -> None:

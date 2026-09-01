@@ -229,7 +229,8 @@ def delineate_catchment(
         input=payload,
         capture_output=True,
         text=True,
-        timeout=300,  # 5 min — generous for slow lab machines
+        timeout=300,          # 5 min — generous for slow lab machines
+        start_new_session=True,  # own process group → Ctrl+C won't kill it
     )
 
     if proc.returncode != 0 and not proc.stdout.strip():
