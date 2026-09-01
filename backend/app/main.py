@@ -79,6 +79,8 @@ async def root():
 
 
 # ── Simple top-level route ────────────────────────────────────────────────────
+import asyncio
+import functools
 from fastapi import UploadFile
 
 @app.post(
@@ -102,14 +104,29 @@ async def analyze_contour_simple(file: UploadFile):
     Simple single-file endpoint — no extra parameters needed.
     """
     file_bytes = await file.read()
-    result = await _analyze_contour(
-        file_bytes=file_bytes,
-        filename=file.filename or "upload.kml",
-        grid_resolution=200,
-        drainage_threshold_pct=2.0,
-        drainage_buffer_cells=2,
-        snap_radius_cells=5,
-        skip_osm=False,
+
+    # _analyze_contour contains CPU-bound and blocking I/O (scipy, pysheds,
+    # subprocess.run). Running it directly in an async function would freeze
+    # the event loop, making the server unresponsive to ALL other requests
+    # (health checks, docs, etc.) for the entire 2-4 minute analysis window.
+    #
+    # asyncio.to_thread() moves the work to a thread-pool worker so the event
+    # loop stays free to handle other requests while analysis is in progress.
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,  # default ThreadPoolExecutor
+        functools.partial(
+            asyncio.run,
+            _analyze_contour(
+                file_bytes=file_bytes,
+                filename=file.filename or "upload.kml",
+                grid_resolution=200,
+                drainage_threshold_pct=2.0,
+                drainage_buffer_cells=2,
+                snap_radius_cells=5,
+                skip_osm=False,
+            ),
+        ),
     )
 
     # Best candidate
