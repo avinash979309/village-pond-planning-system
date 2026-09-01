@@ -59,18 +59,7 @@ _RESULT_CACHE_LIMIT = 20
 
 @router.post(
     "/analyze-contour",
-    summary="Analyze a contour map and return catchment information",
-    description=(
-        "Upload a KML or KMZ contour map. "
-        "The API parses contour lines, reconstructs an elevation surface, "
-        "performs D8 hydrological analysis, fetches real water bodies from OSM "
-        "(so results are never placed inside rivers/lakes), selects a pond candidate, "
-        "and delineates the contributing catchment area. "
-        "Response includes a `visualization_urls.geojson_io` link — click it to see "
-        "pond (green), pour point (blue), and catchment (red) on a live map instantly. "
-        "All results are derived algorithmically from the input — no hardcoded values."
-    ),
-    response_description="Structured catchment analysis result with GeoJSON geometries and visualization URLs",
+    include_in_schema=False,
     status_code=status.HTTP_200_OK,
 )
 async def analyze_contour_endpoint(
@@ -129,14 +118,7 @@ async def analyze_contour_endpoint(
 
 @router.post(
     "/analyze-contour/download-geojson",
-    summary="Analyze contour map and download a styled GeoJSON file",
-    description=(
-        "Same analysis as /analyze-contour but returns a downloadable .geojson file "
-        "instead of JSON. The file is pre-styled with Mapbox SimpleStyle colours: "
-        "pond candidate = green, pour point = blue, catchment = red. "
-        "Drag-drop the downloaded file into https://geojson.io to visualise instantly."
-    ),
-    response_description="Downloadable styled GeoJSON FeatureCollection",
+    include_in_schema=False,
     status_code=status.HTTP_200_OK,
 )
 async def download_geojson_endpoint(
@@ -147,17 +129,6 @@ async def download_geojson_endpoint(
     snap_radius_cells: int = Form(default=5, ge=1, le=30),
     skip_osm: bool = Form(default=False),
 ):
-    """
-    POST /api/v1/contour/analyze-contour/download-geojson
-
-    Returns a `result.geojson` file download — pre-coloured, ready for
-    drag-drop into geojson.io or QGIS.
-
-    **Colour legend:**
-    - 🟢 Green = Pond Candidate
-    - 🔵 Blue  = Pour Point (catchment outlet)
-    - 🔴 Red   = Catchment Boundary
-    """
     result = await _run_analysis(
         file=file,
         grid_resolution=grid_resolution,
@@ -166,9 +137,7 @@ async def download_geojson_endpoint(
         snap_radius_cells=snap_radius_cells,
         skip_osm=skip_osm,
     )
-
     geojson_bytes = json.dumps(result["colored_geojson"], indent=2).encode("utf-8")
-
     return Response(
         content=geojson_bytes,
         media_type="application/geo+json",
@@ -179,16 +148,9 @@ async def download_geojson_endpoint(
     )
 
 
-# ── Visualize redirect endpoint ───────────────────────────────────────────────
-
 @router.get(
     "/visualize/{result_id}",
-    summary="Redirect to geojson.io visualization for a stored result",
-    description=(
-        "Redirects the browser to geojson.io with the colored GeoJSON pre-loaded. "
-        "The result_id is returned by POST /analyze-contour in the `result_id` field. "
-        "Results are cached in memory for up to 20 requests."
-    ),
+    include_in_schema=False,
     status_code=status.HTTP_302_FOUND,
 )
 async def visualize_result_endpoint(result_id: str):

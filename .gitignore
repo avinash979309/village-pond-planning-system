@@ -1,9 +1,19 @@
+# Python
 backend/venv/
 __pycache__/
 *.pyc
 *.pyo
-.env
 *.egg-info/
 .pytest_cache/
+
+# Env / logs
+.env
 *.log
 nohup.out
+
+# Exclude from repo
+docs/
+CSD_Assignment_1.pdf
+phase2_testing_guide.md
+result_explanation_phase2.md
+result_screenshots/

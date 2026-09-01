@@ -57,10 +57,41 @@ async def health():
     return {"status": "ok", "version": "0.1.0"}
 
 
-# ── Simple top-level route (assignment requirement) ───────────────────────────
+# ── Root route ────────────────────────────────────────────────────────────────
+@app.get("/", tags=["Health"])
+async def root():
+    """API information and available endpoints."""
+    return {
+        "name": "Village Pond Planning System API",
+        "version": "0.1.0",
+        "status": "running",
+        "usage": {
+            "analyze": "POST /analyzeContour  — upload a KML/KMZ contour map",
+            "docs": "GET /docs  — interactive API documentation",
+            "health": "GET /api/v1/health  — liveness check",
+        },
+        "description": (
+            "Upload a contour map to identify optimal pond locations. "
+            "Returns up to 3 ranked candidates with catchment area, coordinates, "
+            "and suitability scores."
+        ),
+    }
+
+
+# ── Simple top-level route ────────────────────────────────────────────────────
 from fastapi import UploadFile
 
-@app.post("/analyzeContour", tags=["Pond Analysis"])
+@app.post(
+    "/analyzeContour",
+    tags=["Pond Analysis"],
+    summary="Analyze a contour map and identify optimal pond locations",
+    description=(
+        "Upload a KML or KMZ contour map. "
+        "The API analyzes terrain, identifies optimal pond sites away from rivers, "
+        "and returns up to 3 ranked candidates with catchment area and coordinates. "
+        "**No extra parameters needed** — just upload the file."
+    ),
+)
 async def analyze_contour_simple(file: UploadFile):
     """
     POST /analyzeContour
