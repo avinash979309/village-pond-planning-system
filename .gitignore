@@ -1,0 +1,9 @@
+backend/venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+.pytest_cache/
+*.log
+nohup.out

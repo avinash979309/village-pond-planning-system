@@ -1,0 +1,36 @@
+# ── Core framework ─────────────────────────────────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9      # multipart/form-data file uploads
+
+# ── Validation / config ─────────────────────────────────────────────────────
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+
+# ── XML parsing (KML) ───────────────────────────────────────────────────────
+lxml>=5.0.0
+
+# ── Numerical / scientific ──────────────────────────────────────────────────
+# np.in1d removal in NumPy 2.0 is handled by a compatibility shim in
+# hydrology_engine.py and catchment_delineator.py before pysheds import.
+numpy>=1.26.0
+scipy>=1.12.0
+
+# ── Geospatial / raster ─────────────────────────────────────────────────────
+rasterio>=1.3.0
+pysheds>=0.5                 # D8 flow direction, accumulation, catchment (0.5+ tested with numpy 2.x shim)
+shapely>=2.0.0
+geopandas>=0.14.0
+pyproj>=3.6.0
+
+# ── HTTP client ─────────────────────────────────────────────────────────────
+httpx>=0.27.0
+
+# ── Database (optional for Phase 2 — required from Phase 3+) ────────────────
+motor>=3.3.0                 # async MongoDB driver
+
+# ── Testing ─────────────────────────────────────────────────────────────────
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+httpx>=0.27.0                # async test client for FastAPI

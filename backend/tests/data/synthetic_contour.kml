@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SYNTHETIC CONTOUR MAP — FOR UNIT TESTING ONLY
+  ==============================================
+  This file does NOT represent any real-world location.
+  It was generated programmatically to exercise the contour analysis pipeline.
+
+  Terrain description:
+    - A simple bowl/valley shape centred at (0.05, 0.05) degrees.
+    - Contours at 100, 105, 110, 115, 120, 125 m elevation.
+    - 100 m is the lowest, innermost contour (valley floor).
+    - 125 m is the highest, outermost contour (ridge).
+    - The terrain naturally drains toward the low-elevation centre.
+    - Suitable for testing: interpolation, D8 flow, catchment delineation.
+
+  Spatial extent:  0.00 – 0.10 lon,  0.00 – 0.10 lat  (~11 km x 11 km)
+  Contour interval: 5 m
+  CRS: WGS84 (EPSG:4326)
+-->
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Folder>
+    <name>SyntheticBowlTerrain</name>
+    <Folder>
+      <name>contours_5.0m</name>
+      <Folder>
+        <name>lines</name>
+
+        <!-- Contour: 100 m (inner – valley floor) -->
+        <Placemark>
+          <name>100.0</name>
+          <LineString>
+            <coordinates>
+              0.045,0.050 0.046,0.047 0.050,0.045 0.054,0.047
+              0.055,0.050 0.054,0.053 0.050,0.055 0.046,0.053
+              0.045,0.050
+            </coordinates>
+          </LineString>
+        </Placemark>
+
+        <!-- Contour: 105 m -->
+        <Placemark>
+          <name>105.0</name>
+          <LineString>
+            <coordinates>
+              0.040,0.050 0.042,0.044 0.050,0.040 0.058,0.044
+              0.060,0.050 0.058,0.056 0.050,0.060 0.042,0.056
+              0.040,0.050
+            </coordinates>
+          </LineString>
+        </Placemark>
+
+        <!-- Contour: 110 m -->
+        <Placemark>
+          <name>110.0</name>
+          <LineString>
+            <coordinates>
+              0.033,0.050 0.036,0.040 0.050,0.033 0.064,0.040
+              0.067,0.050 0.064,0.060 0.050,0.067 0.036,0.060
+              0.033,0.050
+            </coordinates>
+          </LineString>
+        </Placemark>
+
+        <!-- Contour: 115 m -->
+        <Placemark>
+          <name>115.0</name>
+          <LineString>
+            <coordinates>
+              0.025,0.050 0.030,0.035 0.050,0.025 0.070,0.035
+              0.075,0.050 0.070,0.065 0.050,0.075 0.030,0.065
+              0.025,0.050
+            </coordinates>
+          </LineString>
+        </Placemark>
+
+        <!-- Contour: 120 m -->
+        <Placemark>
+          <name>120.0</name>
+          <LineString>
+            <coordinates>
+              0.015,0.050 0.022,0.028 0.050,0.015 0.078,0.028
+              0.085,0.050 0.078,0.072 0.050,0.085 0.022,0.072
+              0.015,0.050
+            </coordinates>
+          </LineString>
+        </Placemark>
+
+        <!-- Contour: 125 m (outer – ridge) -->
+        <Placemark>
+          <name>125.0</name>
+          <LineString>
+            <coordinates>
+              0.005,0.050 0.015,0.020 0.050,0.005 0.085,0.020
+              0.095,0.050 0.085,0.080 0.050,0.095 0.015,0.080
+              0.005,0.050
+            </coordinates>
+          </LineString>
+        </Placemark>
+
+      </Folder>
+    </Folder>
+  </Folder>
+</kml>
