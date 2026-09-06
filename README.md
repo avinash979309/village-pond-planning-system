@@ -45,7 +45,7 @@ uvicorn app.main:app --port 8000
 ### Option 1 — Simple curl command
 
 ```bash
-curl -X POST http://localhost:8000/analyzeContour \
+curl -X POST http://localhost:5000/analyzeContour \
   -F "file=@maps/sample_contour_map.kml"
 ```
 
