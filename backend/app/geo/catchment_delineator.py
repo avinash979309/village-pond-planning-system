@@ -5,65 +5,55 @@ Algorithm
 ---------
 1. Snap the pond candidate location to the nearest high-accumulation cell
    within a search radius (pour-point determination).
-   This ensures the hydrological pour point is on a defined flow path
-   rather than on the arbitrary candidate cell, which may be slightly
-   off-channel.
 
-2. Use pysheds grid.catchment() to trace all upstream cells that drain
-   to the pour point.
+2. Trace all upstream cells using a pure-numpy D8 BFS (breadth-first
+   search). Each cell is checked: does it point (via its D8 direction
+   code) into a cell already in the catchment? If yes, it is added.
+   This replaces the previous subprocess-based pysheds grid.catchment()
+   call which timed out on Python 3.14 / conda lab machines.
 
-3. Vectorise the catchment raster mask to a GeoJSON Polygon using
-   rasterio.features.shapes.
+3. Build a GeoJSON Polygon by unioning the bounding boxes of all
+   catchment cells using Shapely.
 
-4. Compute the catchment area using pyproj UTM projection.
-   Area MUST NOT be computed in degree-squared units.
+4. Compute catchment area using pyproj UTM projection.
 
 5. Compute catchment statistics (average elevation, cell count, centroid).
-
-Design note
------------
-The distinction between pond candidate (selected by suitability scoring)
-and pour point (snapped to drainage) is maintained here.
-The pond is not necessarily placed directly on the drainage channel —
-it is the candidate location. The pour point is a nearby drainage cell
-used as the hydrological input to delineation.
-
-This module receives a pysheds Grid already constructed by hydrology_engine.
-It does NOT re-read the DEM file.
 """
 
 from __future__ import annotations
 
-import math
+from collections import deque
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 import numpy as np
-import rasterio
-from rasterio.features import shapes
-from shapely.geometry import mapping, shape
+from shapely.geometry import box as shapely_box, mapping
 from shapely.ops import transform, unary_union
-
-# ── NumPy 2.x compatibility for pysheds ──────────────────────────────────────
-if not hasattr(np, "in1d"):
-    def _in1d_compat(ar1, ar2, **kw):
-        import numpy as _n
-        return _n.isin(ar1, ar2, **kw).ravel()
-    np.in1d = _in1d_compat
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 from app.geo.utils import BBox, coords_to_grid_index, grid_index_to_coords, haversine_m, utm_epsg_for_bbox
 
 try:
     from pyproj import CRS, Transformer
     _PYPROJ_AVAILABLE = True
-except ImportError:  # pragma: no cover
+except ImportError:
     _PYPROJ_AVAILABLE = False
 
 
+# D8 direction code → (Δrow, Δcol) of the cell it flows INTO
+# pysheds encoding: E=1, SE=2, S=4, SW=8, W=16, NW=32, N=64, NE=128
+_D8_OFFSETS: dict[int, tuple[int, int]] = {
+    1:   ( 0, +1),   # East
+    2:   (+1, +1),   # South-East
+    4:   (+1,  0),   # South
+    8:   (+1, -1),   # South-West
+    16:  ( 0, -1),   # West
+    32:  (-1, -1),   # North-West
+    64:  (-1,  0),   # North
+    128: (-1, +1),   # North-East
+}
 
-# ── Output ────────────────────────────────────────────────────────────────────
+
+# ── Output dataclasses ────────────────────────────────────────────────────────
 
 @dataclass
 class PourPointResult:
@@ -101,27 +91,11 @@ def snap_to_pour_point(
     """
     Snap a pond candidate location to the nearest high-flow drainage cell.
 
-    Rationale
-    ---------
-    pysheds delineation works best when the pour point sits on a
-    well-defined flow path (high accumulation cell). Placing the pour
-    point slightly off-channel can cause the catchment to be tiny
-    (only a few cells) or miss the main drainage network.
-
-    Algorithm
-    ----------
-    - Convert candidate (lon, lat) to grid (row, col).
-    - Search within snap_radius_cells for the cell with the highest
-      flow accumulation.
-    - Return that cell's coordinates as the pour point.
-    - Record the snap distance in metres.
-
     Parameters
     ----------
     candidate_lon, candidate_lat : float
     flow_accumulation : np.ndarray (rows, cols)
     drainage_mask : np.ndarray (bool)
-        True = drainage channel cells. Pour point preferentially snaps here.
     bbox : BBox
     snap_radius_cells : int
 
@@ -132,29 +106,23 @@ def snap_to_pour_point(
     rows, cols = flow_accumulation.shape
     cand_row, cand_col = coords_to_grid_index(candidate_lon, candidate_lat, bbox, (rows, cols))
 
-    # Search window
     r_lo = max(0, cand_row - snap_radius_cells)
     r_hi = min(rows - 1, cand_row + snap_radius_cells)
     c_lo = max(0, cand_col - snap_radius_cells)
     c_hi = min(cols - 1, cand_col + snap_radius_cells)
 
-    window_acc = flow_accumulation[r_lo:r_hi+1, c_lo:c_hi+1].copy()
-
-    # Prefer drainage cells within window; if none, use all cells
+    window_acc   = flow_accumulation[r_lo:r_hi+1, c_lo:c_hi+1].copy()
     window_drain = drainage_mask[r_lo:r_hi+1, c_lo:c_hi+1]
-    if window_drain.any():
-        # Zero-out non-drainage cells to prefer drainage
-        search_acc = window_acc * window_drain.astype(float)
-    else:
-        search_acc = window_acc
 
-    flat_idx = int(np.argmax(search_acc))
+    search_acc = window_acc * window_drain.astype(float) if window_drain.any() else window_acc
+
+    flat_idx         = int(np.argmax(search_acc))
     win_row, win_col = np.unravel_index(flat_idx, search_acc.shape)
-    snap_row = r_lo + win_row
-    snap_col = c_lo + win_col
+    snap_row         = r_lo + win_row
+    snap_col         = c_lo + win_col
 
     snap_lon, snap_lat = grid_index_to_coords(snap_row, snap_col, bbox, (rows, cols))
-    snap_dist_m = haversine_m(candidate_lon, candidate_lat, snap_lon, snap_lat)
+    snap_dist_m        = haversine_m(candidate_lon, candidate_lat, snap_lon, snap_lat)
 
     return PourPointResult(
         lon=snap_lon,
@@ -167,109 +135,131 @@ def snap_to_pour_point(
 
 
 def delineate_catchment(
-    pysheds_grid,          # pysheds.grid.Grid (not mutated — kept for API compat)
+    pysheds_grid,              # kept for API compatibility — NOT used
     flow_direction_arr: np.ndarray,
     pour_point: PourPointResult,
     elev_grid: np.ndarray,
     bbox: BBox,
-    temp_dem_path: str,
+    temp_dem_path: str,        # kept for API compatibility — NOT used
 ) -> CatchmentResult:
     """
-    Delineate the catchment area upstream of the pour point.
+    Delineate the catchment upstream of the pour point using a
+    pure-numpy D8 breadth-first search.
 
-    Each call runs in an isolated subprocess so pysheds C-heap state is
-    reset between candidates. This prevents malloc corruption
-    (malloc: mismatching next->prev_size) that occurs when pysheds
-    fill_pits/resolve_flats/flowdir/catchment are called > once in-process.
+    This replaces the former subprocess-based pysheds grid.catchment()
+    call. That approach timed out on Python 3.14 / conda environments
+    because pysheds re-ran the full fill/flowdir pipeline inside the
+    child process. The BFS here completes in milliseconds for a 100×100
+    grid and requires no subprocesses.
 
     Parameters
     ----------
-    pysheds_grid : pysheds.grid.Grid
-        Accepted for API compatibility but NOT used; subprocess creates its own.
+    pysheds_grid : ignored (kept for call-site compatibility)
     flow_direction_arr : np.ndarray
-        D8 flow direction grid (unused here; kept for signature compat).
+        D8 flow direction grid (pysheds int encoding).
     pour_point : PourPointResult
     elev_grid : np.ndarray (rows, cols)
-        Original elevation grid (for average elevation in catchment).
     bbox : BBox
-    temp_dem_path : str
-        Path to the temporary GeoTIFF (needed to read rasterio transform).
+    temp_dem_path : ignored
 
     Returns
     -------
     CatchmentResult
     """
-    # ── Subprocess isolation ──────────────────────────────────────────────────
-    # pysheds (<=0.5) corrupts the C heap when fill_pits/fill_depressions/
-    # resolve_flats/flowdir/catchment are called more than once in the same
-    # process (malloc: mismatching next->prev_size). Running each delineation
-    # in a fresh subprocess gives it a clean heap. No shared state possible.
-    import json as _json
-    import subprocess
-    import sys as _sys
-    import pathlib as _pathlib
+    rows, cols = flow_direction_arr.shape
+    pr, pc     = pour_point.row, pour_point.col
 
-    utm_epsg = utm_epsg_for_bbox(bbox)
+    # ── BFS upstream trace ────────────────────────────────────────────────────
+    # For each visited cell (r, c), look at all 8 neighbours.
+    # Neighbour at (r - dr, c - dc) with direction code d flows INTO (r, c).
+    catch_mask = np.zeros((rows, cols), dtype=bool)
+    if 0 <= pr < rows and 0 <= pc < cols:
+        catch_mask[pr, pc] = True
 
-    payload = _json.dumps({
-        "temp_dem_path": temp_dem_path,
-        "pour_lon":      pour_point.lon,
-        "pour_lat":      pour_point.lat,
-        "elev_grid":     elev_grid.tolist(),
-        "utm_epsg":      utm_epsg,
-        # Pass pre-computed flow direction so the worker skips the
-        # expensive fill_pits/fill_depressions/resolve_flats/flowdir steps.
-        "fdir_arr":      flow_direction_arr.tolist(),
-    })
+    queue = deque([(pr, pc)])
+    while queue:
+        r, c = queue.popleft()
+        for d, (dr, dc) in _D8_OFFSETS.items():
+            nr, nc = r - dr, c - dc          # neighbour that would flow INTO (r,c)
+            if (0 <= nr < rows and 0 <= nc < cols
+                    and not catch_mask[nr, nc]
+                    and flow_direction_arr[nr, nc] == d):
+                catch_mask[nr, nc] = True
+                queue.append((nr, nc))
 
-    worker_path = str(_pathlib.Path(__file__).with_name("_delineate_worker.py"))
+    cell_count = int(catch_mask.sum())
 
-    proc = subprocess.run(
-        [_sys.executable, worker_path],
-        input=payload,
-        capture_output=True,
-        text=True,
-        timeout=300,          # 5 min — generous for slow lab machines
-        start_new_session=True,  # own process group → Ctrl+C won't kill it
-    )
+    # ── Build polygon from cell bounding boxes ────────────────────────────────
+    lon_cell = (bbox.east  - bbox.west)  / cols
+    lat_cell = (bbox.north - bbox.south) / rows
 
-    if proc.returncode != 0 and not proc.stdout.strip():
-        raise RuntimeError(
-            f"Delineation worker crashed (exit {proc.returncode}). "
-            f"stderr: {proc.stderr[:500]}"
+    rs, cs = np.where(catch_mask)
+    polys = [
+        shapely_box(
+            bbox.west  + c_i * lon_cell,           # minx
+            bbox.north - (r_i + 1) * lat_cell,     # miny
+            bbox.west  + (c_i + 1) * lon_cell,     # maxx
+            bbox.north - r_i * lat_cell,            # maxy
+        )
+        for r_i, c_i in zip(rs, cs)
+    ]
+
+    if polys:
+        merged = unary_union(polys)
+    else:
+        # Degenerate: single-cell catchment at pour point
+        merged = shapely_box(
+            bbox.west  + pc * lon_cell,
+            bbox.north - (pr + 1) * lat_cell,
+            bbox.west  + (pc + 1) * lon_cell,
+            bbox.north - pr * lat_cell,
         )
 
-    try:
-        result = _json.loads(proc.stdout.strip())
-    except Exception as exc:
-        raise RuntimeError(
-            f"Delineation worker returned invalid JSON. "
-            f"stdout: {proc.stdout[:300]} stderr: {proc.stderr[:300]}"
-        ) from exc
+    # ── Area in m² via UTM projection ─────────────────────────────────────────
+    utm_epsg = utm_epsg_for_bbox(bbox)
+    if _PYPROJ_AVAILABLE:
+        wgs84 = CRS.from_epsg(4326)
+        utm   = CRS.from_epsg(utm_epsg)
+        tf    = Transformer.from_crs(wgs84, utm, always_xy=True)
+        projected = transform(tf.transform, merged)
+        area_sq_m = projected.area
+    else:
+        # Fallback: approximate from cell count × cell area
+        mid_lat   = (bbox.north + bbox.south) / 2.0
+        lon_m     = lon_cell * 111_320.0 * np.cos(np.radians(mid_lat))
+        lat_m     = lat_cell * 110_574.0
+        area_sq_m = cell_count * lon_m * lat_m
 
-    if not result.get("ok"):
-        raise ValueError(result.get("error", "Delineation worker failed."))
+    area_sq_km = area_sq_m / 1_000_000.0
+
+    # ── Elevation stats ───────────────────────────────────────────────────────
+    catch_elevs = elev_grid[catch_mask]
+    avg_elev    = float(np.mean(catch_elevs)) if len(catch_elevs) > 0 else 0.0
+    centroid    = merged.centroid
 
     catchment_geojson = {
         "type": "Feature",
-        "geometry": result["polygon"],
+        "geometry": mapping(merged),
         "properties": {
-            "area_sq_km":      round(result["area_sq_km"], 4),
-            "area_sq_m":       round(result["area_sq_m"], 1),
-            "avg_elevation_m": round(result["avg_elev"], 2),
-            "cell_count":      result["cell_count"],
+            "area_sq_km":      round(area_sq_km, 4),
+            "area_sq_m":       round(area_sq_m, 1),
+            "avg_elevation_m": round(avg_elev, 2),
+            "cell_count":      cell_count,
             "projection_used": f"EPSG:{utm_epsg}",
         },
     }
 
     return CatchmentResult(
         geojson=catchment_geojson,
-        area_sq_m=result["area_sq_m"],
-        area_sq_km=result["area_sq_km"],
-        avg_elevation_m=result["avg_elev"],
-        cell_count=result["cell_count"],
-        centroid_lon=result["centroid_lon"],
-        centroid_lat=result["centroid_lat"],
+        area_sq_m=area_sq_m,
+        area_sq_km=area_sq_km,
+        avg_elevation_m=avg_elev,
+        cell_count=cell_count,
+        centroid_lon=float(centroid.x),
+        centroid_lat=float(centroid.y),
         projection_epsg=utm_epsg,
         pour_point=pour_point,
     )
+
+
+
