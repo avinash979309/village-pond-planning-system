@@ -32,9 +32,10 @@ from app.geo.water_volume import estimate_water_volume
 # Directory containing .hgt files
 _SRTM_DIR = Path(__file__).parent.parent / "data" / "srtm"
 
-# Grid resolution for area-based analysis (80x80 = fast enough on lab machine)
-_GRID_ROWS = 80
-_GRID_COLS = 80
+# Grid resolution — 50x50 keeps memory well under 512MB cgroup limit
+# (80x80 was triggering OOM kills on the lab server)
+_GRID_ROWS = 50
+_GRID_COLS = 50
 
 # Max bbox size in degrees (~100 km per side)
 _MAX_BBOX_DEG = 1.0
@@ -102,26 +103,22 @@ def _hgt_tile_name(lat_floor: int, lon_floor: int) -> str:
 
 def _load_hgt_tile(lat_floor: int, lon_floor: int) -> np.ndarray:
     """
-    Load one SRTM HGT tile as float32 array shape (3601, 3601).
-    Row 0 = north edge (lat_floor+1), col 0 = west edge (lon_floor).
-    Void values (-32768) replaced with NaN.
+    Load SRTM HGT tile as int16 array (3601, 3601).
+    Kept as int16 in cache (25MB) not float32 (52MB) to stay under 512MB cgroup.
     """
     name = _hgt_tile_name(lat_floor, lon_floor)
     path = _SRTM_DIR / name
     if not path.exists():
         raise FileNotFoundError(
-            f"SRTM tile {name} not found in {_SRTM_DIR}. "
-            f"Available tiles: {[f.name for f in _SRTM_DIR.glob('*.hgt')]}. "
-            f"The selected area may be outside the covered region. "
-            f"Please select an area near IIT Bhilai / Chhattisgarh."
+            f"SRTM tile {name} not found. "
+            f"Available: {[f.name for f in _SRTM_DIR.glob('*.hgt')]}. "
+            f"Select an area near IIT Bhilai / Chhattisgarh."
         )
-    raw = np.frombuffer(path.read_bytes(), dtype=">i2")  # big-endian int16
-    data = raw.reshape(3601, 3601).astype(np.float32)
-    data[data == -32768] = np.nan
-    return data
+    raw = np.frombuffer(path.read_bytes(), dtype=">i2")
+    return raw.reshape(3601, 3601)  # int16, no float conversion yet
 
 
-# Module-level tile cache — avoids re-reading 25MB file on every request
+# Module-level tile cache — 25MB int16 per tile, not 52MB float32
 _tile_cache: dict = {}
 
 def _load_hgt_tile_cached(lat_floor: int, lon_floor: int) -> np.ndarray:
@@ -129,6 +126,7 @@ def _load_hgt_tile_cached(lat_floor: int, lon_floor: int) -> np.ndarray:
     if key not in _tile_cache:
         _tile_cache[key] = _load_hgt_tile(lat_floor, lon_floor)
     return _tile_cache[key]
+
 
 
 def _extract_elevation_grid(bbox: BBox, rows: int, cols: int) -> np.ndarray:
@@ -148,7 +146,7 @@ def _extract_elevation_grid(bbox: BBox, rows: int, cols: int) -> np.ndarray:
     # 2D meshgrid of all sample points
     lon_grid, lat_grid = np.meshgrid(sample_lons, sample_lats)  # (rows, cols) each
 
-    result = np.full((rows, cols), np.nan, dtype=np.float64)
+    result = np.full((rows, cols), np.nan, dtype=np.float32)
 
     for lat_tile in range(lat_min_tile, lat_max_tile + 1):
         for lon_tile in range(lon_min_tile, lon_max_tile + 1):
@@ -166,25 +164,29 @@ def _extract_elevation_grid(bbox: BBox, rows: int, cols: int) -> np.ndarray:
             if not in_tile.any():
                 continue
 
-            # Fractional pixel coords (float) for all in-tile points
-            pr = (tile_north - lat_grid[in_tile]) * 3600.0   # row in tile
-            pc = (lon_grid[in_tile] - tile_west) * 3600.0    # col in tile
+            pr = (tile_north - lat_grid[in_tile]) * 3600.0
+            pc = (lon_grid[in_tile] - tile_west) * 3600.0
 
-            pr0 = np.clip(np.floor(pr).astype(int), 0, 3599)
+            pr0 = np.clip(np.floor(pr).astype(np.int32), 0, 3599)
             pr1 = np.minimum(pr0 + 1, 3600)
-            pc0 = np.clip(np.floor(pc).astype(int), 0, 3599)
+            pc0 = np.clip(np.floor(pc).astype(np.int32), 0, 3599)
             pc1 = np.minimum(pc0 + 1, 3600)
 
-            wr1 = pr - pr0          # fractional weight toward pr1
-            wr0 = 1.0 - wr1
-            wc1 = pc - pc0
-            wc0 = 1.0 - wc1
+            wr1 = (pr - pr0).astype(np.float32)
+            wr0 = np.float32(1.0) - wr1
+            wc1 = (pc - pc0).astype(np.float32)
+            wc0 = np.float32(1.0) - wc1
 
-            # Bilinear interpolation — all points at once
-            vals = (wr0 * wc0 * tile[pr0, pc0] +
-                    wr0 * wc1 * tile[pr0, pc1] +
-                    wr1 * wc0 * tile[pr1, pc0] +
-                    wr1 * wc1 * tile[pr1, pc1])
+            # Convert only the 4 corner values to float32 (not the whole tile)
+            v00 = tile[pr0, pc0].astype(np.float32)
+            v01 = tile[pr0, pc1].astype(np.float32)
+            v10 = tile[pr1, pc0].astype(np.float32)
+            v11 = tile[pr1, pc1].astype(np.float32)
+
+            # Mask SRTM void value (-32768)
+            void = (v00 == -32768) | (v01 == -32768) | (v10 == -32768) | (v11 == -32768)
+            vals = wr0 * wc0 * v00 + wr0 * wc1 * v01 + wr1 * wc0 * v10 + wr1 * wc1 * v11
+            vals[void] = np.nan
 
             result[in_tile] = vals
 
@@ -195,6 +197,7 @@ def _extract_elevation_grid(bbox: BBox, rows: int, cols: int) -> np.ndarray:
         result[nan_mask] = result[tuple(idx[:, nan_mask])]
 
     return result
+
 
 
 # ── Pipeline ───────────────────────────────────────────────────────────────────
