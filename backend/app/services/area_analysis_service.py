@@ -121,68 +121,73 @@ def _load_hgt_tile(lat_floor: int, lon_floor: int) -> np.ndarray:
     return data
 
 
+# Module-level tile cache — avoids re-reading 25MB file on every request
+_tile_cache: dict = {}
+
+def _load_hgt_tile_cached(lat_floor: int, lon_floor: int) -> np.ndarray:
+    key = (lat_floor, lon_floor)
+    if key not in _tile_cache:
+        _tile_cache[key] = _load_hgt_tile(lat_floor, lon_floor)
+    return _tile_cache[key]
+
+
 def _extract_elevation_grid(bbox: BBox, rows: int, cols: int) -> np.ndarray:
     """
-    Sample elevation from SRTM HGT tiles at a (rows × cols) regular grid
-    covering bbox. Returns float64 array, row 0 = northernmost.
-
-    Supports bbox spanning multiple tiles by stitching them.
+    Vectorized SRTM extraction — no Python loops over grid points.
+    Samples a (rows × cols) grid from HGT tiles using numpy bilinear interp.
     """
     lat_min_tile = int(np.floor(bbox.south))
     lat_max_tile = int(np.floor(bbox.north))
     lon_min_tile = int(np.floor(bbox.west))
     lon_max_tile = int(np.floor(bbox.east))
 
-    # Build sample coordinate arrays
-    sample_lats = np.linspace(bbox.north, bbox.south, rows)   # north → south
-    sample_lons = np.linspace(bbox.west,  bbox.east,  cols)   # west  → east
+    # Sample grid coords (north→south rows, west→east cols)
+    sample_lats = np.linspace(bbox.north, bbox.south, rows)
+    sample_lons = np.linspace(bbox.west,  bbox.east,  cols)
+
+    # 2D meshgrid of all sample points
+    lon_grid, lat_grid = np.meshgrid(sample_lons, sample_lats)  # (rows, cols) each
 
     result = np.full((rows, cols), np.nan, dtype=np.float64)
 
     for lat_tile in range(lat_min_tile, lat_max_tile + 1):
         for lon_tile in range(lon_min_tile, lon_max_tile + 1):
-            try:
-                tile = _load_hgt_tile(lat_tile, lon_tile)
-            except FileNotFoundError as e:
-                raise FileNotFoundError(str(e)) from None
+            tile = _load_hgt_tile_cached(lat_tile, lon_tile)
 
-            # HGT tile covers lat_tile to lat_tile+1, lon_tile to lon_tile+1
-            # Row 0 of tile = lat_tile+1 (north), row 3600 = lat_tile (south)
             tile_north = float(lat_tile + 1)
             tile_south = float(lat_tile)
             tile_west  = float(lon_tile)
-            tile_east  = float(lon_tile + 1)
 
-            # Convert sample coordinates to tile pixel indices
-            # tile pixel: row = (tile_north - lat) / 1.0 * 3600 (float)
-            #             col = (lon - tile_west)   / 1.0 * 3600
-            for r, lat in enumerate(sample_lats):
-                if not (tile_south <= lat <= tile_north):
-                    continue
-                pr = (tile_north - lat) / 1.0 * 3600.0
-                pr0 = int(np.clip(np.floor(pr), 0, 3599))
-                pr1 = min(pr0 + 1, 3600)
-                wr1 = pr - pr0
-                wr0 = 1.0 - wr1
+            # Boolean mask — which grid points fall in this tile
+            in_tile = (
+                (lat_grid >= tile_south) & (lat_grid <= tile_north) &
+                (lon_grid >= tile_west)  & (lon_grid <= tile_west + 1.0)
+            )
+            if not in_tile.any():
+                continue
 
-                for c, lon in enumerate(sample_lons):
-                    if not (tile_west <= lon <= tile_east):
-                        continue
-                    pc = (lon - tile_west) / 1.0 * 3600.0
-                    pc0 = int(np.clip(np.floor(pc), 0, 3599))
-                    pc1 = min(pc0 + 1, 3600)
-                    wc1 = pc - pc0
-                    wc0 = 1.0 - wc1
+            # Fractional pixel coords (float) for all in-tile points
+            pr = (tile_north - lat_grid[in_tile]) * 3600.0   # row in tile
+            pc = (lon_grid[in_tile] - tile_west) * 3600.0    # col in tile
 
-                    # Bilinear interpolation
-                    v = (wr0 * wc0 * tile[pr0, pc0] +
-                         wr0 * wc1 * tile[pr0, pc1] +
-                         wr1 * wc0 * tile[pr1, pc0] +
-                         wr1 * wc1 * tile[pr1, pc1])
-                    if not np.isnan(v):
-                        result[r, c] = float(v)
+            pr0 = np.clip(np.floor(pr).astype(int), 0, 3599)
+            pr1 = np.minimum(pr0 + 1, 3600)
+            pc0 = np.clip(np.floor(pc).astype(int), 0, 3599)
+            pc1 = np.minimum(pc0 + 1, 3600)
 
-    # Fill any remaining NaN with nearest valid value
+            wr1 = pr - pr0          # fractional weight toward pr1
+            wr0 = 1.0 - wr1
+            wc1 = pc - pc0
+            wc0 = 1.0 - wc1
+
+            # Bilinear interpolation — all points at once
+            vals = (wr0 * wc0 * tile[pr0, pc0] +
+                    wr0 * wc1 * tile[pr0, pc1] +
+                    wr1 * wc0 * tile[pr1, pc0] +
+                    wr1 * wc1 * tile[pr1, pc1])
+
+            result[in_tile] = vals
+
     nan_mask = np.isnan(result)
     if nan_mask.any() and not nan_mask.all():
         from scipy.ndimage import distance_transform_edt

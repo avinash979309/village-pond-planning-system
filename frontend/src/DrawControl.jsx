@@ -3,40 +3,41 @@ import { useMap } from 'react-leaflet'
 import L from 'leaflet'
 
 /**
- * RectangleDraw — when enabled, user can click-drag anywhere on the map
- * to draw a rectangle. No toolbar, no extra clicks.
+ * RectangleDraw — click-drag rectangle on the map.
  *
- * UX:
- *   mousedown → start corner
- *   mousemove → live rectangle preview
- *   mouseup   → finalise → calls onBoundsSelected(bounds)
+ * When `enabled` is true, left-click+drag draws a rectangle.
+ * Map shows a crosshair cursor. Double-click / pan / zoom work normally
+ * when enabled=false (user can navigate freely).
  *
- * Map panning is disabled while drawing so drag creates rectangle not pan.
+ * Drawing starts ONLY on mousedown, NOT on double-click, because we check
+ * that the previous mousedown happened >200ms ago (double-click fires two
+ * mousedowns within ~300ms — we ignore the second one).
  */
 export default function RectangleDraw({ onBoundsSelected, enabled }) {
-  const map = useMap()
-  const rectRef     = useRef(null)   // live preview rectangle
-  const startLatLng = useRef(null)   // where mousedown happened
+  const map         = useMap()
+  const rectRef     = useRef(null)
+  const startLL     = useRef(null)
   const drawing     = useRef(false)
+  const lastDown    = useRef(0)   // timestamp of last mousedown
 
   useEffect(() => {
-    const container = map.getContainer()
-
     const onMouseDown = (e) => {
       if (!enabled) return
-      // Only respond to left-button clicks not on a control/marker
       if (e.originalEvent.button !== 0) return
-      // Stop propagation so map click handler doesn't interfere
-      L.DomEvent.stop(e)
+
+      const now = Date.now()
+      // Ignore second click of a double-click (< 300 ms after last mousedown)
+      if (now - lastDown.current < 300) {
+        lastDown.current = now
+        return
+      }
+      lastDown.current = now
 
       drawing.current = true
-      startLatLng.current = e.latlng
-
-      // Disable map drag while drawing
+      startLL.current = e.latlng
       map.dragging.disable()
 
-      // Create initial zero-size rectangle
-      if (rectRef.current) { map.removeLayer(rectRef.current) }
+      if (rectRef.current) { try { map.removeLayer(rectRef.current) } catch (_) {} }
       rectRef.current = L.rectangle([e.latlng, e.latlng], {
         color: '#1565C0',
         weight: 2,
@@ -47,8 +48,8 @@ export default function RectangleDraw({ onBoundsSelected, enabled }) {
     }
 
     const onMouseMove = (e) => {
-      if (!drawing.current || !startLatLng.current || !rectRef.current) return
-      rectRef.current.setBounds(L.latLngBounds(startLatLng.current, e.latlng))
+      if (!drawing.current || !startLL.current || !rectRef.current) return
+      rectRef.current.setBounds(L.latLngBounds(startLL.current, e.latlng))
     }
 
     const onMouseUp = (e) => {
@@ -56,22 +57,18 @@ export default function RectangleDraw({ onBoundsSelected, enabled }) {
       drawing.current = false
       map.dragging.enable()
 
-      if (!startLatLng.current || !rectRef.current) return
+      if (!startLL.current || !rectRef.current) return
+      const bounds = L.latLngBounds(startLL.current, e.latlng)
 
-      const bounds = L.latLngBounds(startLatLng.current, e.latlng)
-
-      // Ignore tiny accidental clicks (< 0.003° ≈ 300m)
       const latSpan = Math.abs(bounds.getNorth() - bounds.getSouth())
-      const lngSpan = Math.abs(bounds.getEast() - bounds.getWest())
+      const lngSpan = Math.abs(bounds.getEast()  - bounds.getWest())
       if (latSpan < 0.003 || lngSpan < 0.003) {
-        // Too small — remove preview
-        map.removeLayer(rectRef.current)
+        try { map.removeLayer(rectRef.current) } catch (_) {}
         rectRef.current = null
-        startLatLng.current = null
+        startLL.current = null
         return
       }
 
-      // Keep the final rectangle (solid)
       rectRef.current.setStyle({ dashArray: null, fillOpacity: 0.1, weight: 2.5 })
       onBoundsSelected(bounds)
     }
@@ -88,21 +85,19 @@ export default function RectangleDraw({ onBoundsSelected, enabled }) {
     }
   }, [map, enabled, onBoundsSelected])
 
-  // When disabled: remove the drawn rectangle, re-enable dragging
+  // Cursor + cleanup when disabled
   useEffect(() => {
+    map.getContainer().style.cursor = enabled ? 'crosshair' : ''
     if (!enabled) {
       map.dragging.enable()
       drawing.current = false
-      startLatLng.current = null
+      startLL.current = null
       if (rectRef.current) {
         try { map.removeLayer(rectRef.current) } catch (_) {}
         rectRef.current = null
       }
-      onBoundsSelected(null)
     }
-    // Change cursor
-    map.getContainer().style.cursor = enabled ? 'crosshair' : ''
-  }, [enabled, map, onBoundsSelected])
+  }, [enabled, map])
 
   return null
 }

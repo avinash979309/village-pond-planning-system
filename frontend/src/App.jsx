@@ -118,8 +118,7 @@ export default function App() {
     setResult(null)
     setFile(null)
     setSelectedBounds(null)
-    // Enable draw tool when entering draw mode
-    setDrawEnabled(m === MODE_DRAW)
+    setDrawEnabled(false)   // always off — user clicks toggle button to start
   }
 
   const vol  = result?.water_volume
@@ -210,16 +209,39 @@ export default function App() {
           {mode === MODE_DRAW && (
             <div className="sidebar-section">
               <h2>Select Area on Map</h2>
-              <div className="instructions" style={{ marginBottom: 10 }}>
-                <ol>
-                  <li>🖱️ <b>Click and drag</b> directly on the map to draw a rectangle</li>
-                  <li>Release to confirm the area</li>
-                  <li>Click <b>Analyze Area</b> — uses local SRTM elevation data</li>
-                  <li>View pond candidates on the map</li>
-                </ol>
-              </div>
 
-              {selectedBounds ? (
+              {/* Draw toggle button */}
+              <button
+                className={`btn ${drawEnabled ? 'btn-drawing-active' : 'btn-primary'}`}
+                style={{ marginBottom: 10, width: '100%' }}
+                onClick={() => {
+                  if (drawEnabled) {
+                    setDrawEnabled(false)
+                  } else {
+                    setSelectedBounds(null)
+                    setResult(null)
+                    setError(null)
+                    setDrawEnabled(true)
+                  }
+                }}
+                disabled={loading}
+              >
+                {drawEnabled ? '✅ Drawing Active — click to stop' : '✏️ Draw Rectangle on Map'}
+              </button>
+
+              {drawEnabled && (
+                <div className="draw-hint" style={{ marginBottom: 8 }}>
+                  🖱️ <b>Click and drag</b> on the map to draw. Double-click still zooms normally.
+                </div>
+              )}
+
+              {!drawEnabled && !selectedBounds && (
+                <div className="draw-hint" style={{ marginBottom: 8 }}>
+                  Click <b>Draw Rectangle</b> above, then drag on the map to select your area.
+                </div>
+              )}
+
+              {selectedBounds && (
                 <div className="draw-bounds-info">
                   ✅ Area selected<br/>
                   <small>
@@ -227,25 +249,26 @@ export default function App() {
                     NE: {selectedBounds.getNorthEast().lat.toFixed(4)}°N, {selectedBounds.getNorthEast().lng.toFixed(4)}°E
                   </small>
                 </div>
-              ) : (
-                <div className="draw-hint">
-                  🖱️ <b>Click and drag</b> anywhere on the map to select your area
-                </div>
               )}
 
               <button
                 className="btn btn-primary"
-                style={{ marginTop: 10 }}
+                style={{ marginTop: 8 }}
                 disabled={!selectedBounds || loading}
                 onClick={handleAreaSubmit}
               >
-                {loading ? 'Fetching elevation & analyzing…' : 'Analyze Area'}
+                {loading ? 'Analyzing…' : 'Analyze Area'}
               </button>
 
               {selectedBounds && (
                 <button
                   className="btn btn-clear"
-                  onClick={() => { setSelectedBounds(null); setResult(null); setError(null) }}
+                  onClick={() => {
+                    setSelectedBounds(null)
+                    setResult(null)
+                    setError(null)
+                    setDrawEnabled(false)
+                  }}
                 >
                   Clear Selection
                 </button>

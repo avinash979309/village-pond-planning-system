@@ -285,3 +285,22 @@ body {
   margin-bottom: 8px;
   font-weight: 500;
 }
+
+/* Draw mode active button */
+.btn-drawing-active {
+  background: #2e7d32;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  font-weight: 600;
+  animation: pulse-green 1.5s ease-in-out infinite;
+}
+.btn-drawing-active:hover { background: #1b5e20; }
+
+@keyframes pulse-green {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(46,125,50,0.4); }
+  50%       { box-shadow: 0 0 0 6px rgba(46,125,50,0); }
+}
