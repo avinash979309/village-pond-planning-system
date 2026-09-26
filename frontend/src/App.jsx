@@ -212,10 +212,10 @@ export default function App() {
               <h2>Select Area on Map</h2>
               <div className="instructions" style={{ marginBottom: 10 }}>
                 <ol>
-                  <li>Use the <b>rectangle tool</b> (▭) that appeared on the map</li>
-                  <li>Draw a rectangle over your area of interest</li>
-                  <li>Click <b>Analyze Area</b> — fetches elevation data and runs analysis</li>
-                  <li>View results on the map and panel</li>
+                  <li>Click the <b>□ rectangle icon</b> in the toolbar on the map</li>
+                  <li><b>Click once</b> to start, <b>drag</b> to size, <b>release</b> to finish</li>
+                  <li>Click <b>Analyze Area</b> — reads local SRTM elevation data</li>
+                  <li>View pond candidates on the map</li>
                 </ol>
               </div>
 
@@ -229,7 +229,7 @@ export default function App() {
                 </div>
               ) : (
                 <div className="draw-hint">
-                  👆 Draw a rectangle on the map using the toolbar (▭ icon) on the left side of the map
+                  👉 Click the <b>□ rectangle icon</b> in the top-left of the map, then click-and-drag to select your area
                 </div>
               )}
 

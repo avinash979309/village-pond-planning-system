@@ -1,25 +1,22 @@
 """
-Area analysis service — fetch SRTM elevation for a bounding box and run
+Area analysis service — read local SRTM HGT tile for a bounding box and run
 the full pond-site analysis pipeline.
 
-This bypasses the KML parser entirely. It fetches real SRTM 30m elevation
-data from the Open-Elevation API (free, no API key required), builds an
-ElevationGrid from the returned grid, then runs the same hydrology +
-candidate selection pipeline as the KML-based workflow.
+Elevation source: SRTM 1-arcsec HGT tiles bundled in backend/app/data/srtm/.
+No internet required. Tile coverage matches the lab area (IIT Bhilai,
+Chhattisgarh, India).
 
-Fallback: If the Open-Elevation API is unreachable, falls back to the
-Open-Meteo elevation API (also free, no key). If both fail, raises a
-clear error.
+HGT format: raw big-endian int16, 3601x3601 samples for 1x1 degree tile,
+row-major, north to south, west to east.
 """
 
 from __future__ import annotations
 
-import asyncio
-import math
+import os
+import struct
 import tempfile
-from typing import Optional
+from pathlib import Path
 
-import httpx
 import numpy as np
 
 from app.geo.terrain_builder import ElevationGrid
@@ -32,18 +29,15 @@ from app.geo.terrain_water_detector import detect_terrain_water
 from app.geo.utils import BBox, approx_cell_size_m
 from app.geo.water_volume import estimate_water_volume
 
+# Directory containing .hgt files
+_SRTM_DIR = Path(__file__).parent.parent / "data" / "srtm"
 
-# ── Constants ──────────────────────────────────────────────────────────────────
-
-# Open-Elevation public API (no key needed, SRTM data)
-_OPEN_ELEV_URL = "https://api.open-elevation.com/api/v1/lookup"
-
-# Maximum bounding box in degrees (to prevent runaway requests)
-_MAX_BBOX_DEGREES = 1.0   # ~100 km × 100 km max
-
-# Grid resolution for area-based analysis
+# Grid resolution for area-based analysis (80x80 = fast enough on lab machine)
 _GRID_ROWS = 80
 _GRID_COLS = 80
+
+# Max bbox size in degrees (~100 km per side)
+_MAX_BBOX_DEG = 1.0
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -61,40 +55,27 @@ async def analyze_area(
     skip_osm: bool = False,
 ) -> dict:
     """
-    Fetch elevation for the given bbox and run the pond-site analysis pipeline.
-
-    Parameters
-    ----------
-    west, south, east, north : float
-        Bounding box in WGS84 degrees.
-    grid_rows, grid_cols : int
-        Resolution of the elevation grid to build.
-
-    Returns
-    -------
-    dict  — same structure as analyze_contour result dict
+    Fetch SRTM elevation for the given bbox from local HGT tiles and run
+    the full pond-site analysis pipeline.
     """
-    # Validate bbox
+    # Validate
     if east <= west or north <= south:
-        raise ValueError("Invalid bounding box: east > west and north > south required.")
+        raise ValueError("Invalid bbox: east > west and north > south required.")
     lon_span = east - west
     lat_span = north - south
-    if lon_span > _MAX_BBOX_DEGREES or lat_span > _MAX_BBOX_DEGREES:
+    if lon_span > _MAX_BBOX_DEG or lat_span > _MAX_BBOX_DEG:
         raise ValueError(
-            f"Selected area is too large ({lon_span:.2f}° × {lat_span:.2f}°). "
-            f"Please select an area smaller than {_MAX_BBOX_DEGREES}° × {_MAX_BBOX_DEGREES}° "
-            f"(~{int(_MAX_BBOX_DEGREES * 111)} km × {int(_MAX_BBOX_DEGREES * 111)} km)."
+            f"Area too large ({lon_span:.2f}° × {lat_span:.2f}°). "
+            f"Select area smaller than {_MAX_BBOX_DEG}° × {_MAX_BBOX_DEG}° "
+            f"(~{int(_MAX_BBOX_DEG * 111)} km per side)."
         )
     if lon_span < 0.005 or lat_span < 0.005:
         raise ValueError(
-            "Selected area is too small. Please draw a larger rectangle "
-            "(at least ~500m × 500m)."
+            "Area too small. Draw a larger rectangle (at least ~500 m × 500 m)."
         )
 
     bbox = BBox(west=west, east=east, south=south, north=north)
-
-    # Fetch elevation grid
-    elev_data = await _fetch_elevation_grid(bbox, grid_rows, grid_cols)
+    elev_data = _extract_elevation_grid(bbox, grid_rows, grid_cols)
 
     with tempfile.TemporaryDirectory(prefix="pond_area_") as tmp_dir:
         return await _run_area_pipeline(
@@ -110,97 +91,105 @@ async def analyze_area(
         )
 
 
-# ── Elevation fetching ─────────────────────────────────────────────────────────
+# ── SRTM HGT reader ───────────────────────────────────────────────────────────
 
-async def _fetch_elevation_grid(
-    bbox: BBox,
-    rows: int,
-    cols: int,
-) -> np.ndarray:
+def _hgt_tile_name(lat_floor: int, lon_floor: int) -> str:
+    """Return HGT filename for integer tile origin, e.g. N21E081.hgt"""
+    ns = "N" if lat_floor >= 0 else "S"
+    ew = "E" if lon_floor >= 0 else "W"
+    return f"{ns}{abs(lat_floor):02d}{ew}{abs(lon_floor):03d}.hgt"
+
+
+def _load_hgt_tile(lat_floor: int, lon_floor: int) -> np.ndarray:
     """
-    Fetch SRTM elevation for a regular grid of (rows × cols) points covering bbox.
-
-    Returns
-    -------
-    np.ndarray of shape (rows, cols), dtype float64
-        Elevation in metres. Row 0 = northernmost, col 0 = westernmost.
+    Load one SRTM HGT tile as float32 array shape (3601, 3601).
+    Row 0 = north edge (lat_floor+1), col 0 = west edge (lon_floor).
+    Void values (-32768) replaced with NaN.
     """
-    # Build grid of (lat, lon) sample points — row-major, north to south
-    lats = np.linspace(bbox.north, bbox.south, rows)   # north → south
-    lons = np.linspace(bbox.west,  bbox.east,  cols)   # west  → east
-    grid_lons, grid_lats = np.meshgrid(lons, lats)     # shape (rows, cols)
-
-    flat_lats = grid_lats.ravel().tolist()
-    flat_lons = grid_lons.ravel().tolist()
-
-    elevations = await _query_open_elevation(flat_lats, flat_lons)
-    return np.array(elevations, dtype=np.float64).reshape(rows, cols)
-
-
-async def _query_open_elevation(lats: list, lons: list) -> list:
-    """
-    Query Open-Elevation API in batches of 500 points.
-    Falls back to Open-Meteo if unreachable.
-    """
-    points = [{"latitude": lat, "longitude": lon} for lat, lon in zip(lats, lons)]
-    batch_size = 500
-    results = []
-
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        for start in range(0, len(points), batch_size):
-            batch = points[start : start + batch_size]
-            try:
-                resp = await client.post(
-                    _OPEN_ELEV_URL,
-                    json={"locations": batch},
-                    headers={"Accept": "application/json"},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                results.extend(r["elevation"] for r in data["results"])
-            except Exception as e:
-                # Fallback: Open-Meteo elevation endpoint
-                try:
-                    elev = await _query_open_meteo_batch(
-                        client,
-                        [p["latitude"] for p in batch],
-                        [p["longitude"] for p in batch],
-                    )
-                    results.extend(elev)
-                except Exception as e2:
-                    raise RuntimeError(
-                        f"Could not fetch elevation data. "
-                        f"Open-Elevation error: {e}. "
-                        f"Open-Meteo fallback error: {e2}. "
-                        f"Please check your network connection and try again, "
-                        f"or use the KML upload method instead."
-                    )
-    return results
-
-
-async def _query_open_meteo_batch(
-    client: httpx.AsyncClient,
-    lats: list,
-    lons: list,
-) -> list:
-    """
-    Use Open-Meteo elevation API as fallback.
-    Handles up to 100 points per request.
-    """
-    results = []
-    chunk = 100
-    for i in range(0, len(lats), chunk):
-        lat_str = ",".join(f"{v:.6f}" for v in lats[i:i+chunk])
-        lon_str = ",".join(f"{v:.6f}" for v in lons[i:i+chunk])
-        resp = await client.get(
-            "https://api.open-meteo.com/v1/elevation",
-            params={"latitude": lat_str, "longitude": lon_str},
-            timeout=30.0,
+    name = _hgt_tile_name(lat_floor, lon_floor)
+    path = _SRTM_DIR / name
+    if not path.exists():
+        raise FileNotFoundError(
+            f"SRTM tile {name} not found in {_SRTM_DIR}. "
+            f"Available tiles: {[f.name for f in _SRTM_DIR.glob('*.hgt')]}. "
+            f"The selected area may be outside the covered region. "
+            f"Please select an area near IIT Bhilai / Chhattisgarh."
         )
-        resp.raise_for_status()
-        data = resp.json()
-        results.extend(data["elevation"])
-    return results
+    raw = np.frombuffer(path.read_bytes(), dtype=">i2")  # big-endian int16
+    data = raw.reshape(3601, 3601).astype(np.float32)
+    data[data == -32768] = np.nan
+    return data
+
+
+def _extract_elevation_grid(bbox: BBox, rows: int, cols: int) -> np.ndarray:
+    """
+    Sample elevation from SRTM HGT tiles at a (rows × cols) regular grid
+    covering bbox. Returns float64 array, row 0 = northernmost.
+
+    Supports bbox spanning multiple tiles by stitching them.
+    """
+    lat_min_tile = int(np.floor(bbox.south))
+    lat_max_tile = int(np.floor(bbox.north))
+    lon_min_tile = int(np.floor(bbox.west))
+    lon_max_tile = int(np.floor(bbox.east))
+
+    # Build sample coordinate arrays
+    sample_lats = np.linspace(bbox.north, bbox.south, rows)   # north → south
+    sample_lons = np.linspace(bbox.west,  bbox.east,  cols)   # west  → east
+
+    result = np.full((rows, cols), np.nan, dtype=np.float64)
+
+    for lat_tile in range(lat_min_tile, lat_max_tile + 1):
+        for lon_tile in range(lon_min_tile, lon_max_tile + 1):
+            try:
+                tile = _load_hgt_tile(lat_tile, lon_tile)
+            except FileNotFoundError as e:
+                raise FileNotFoundError(str(e)) from None
+
+            # HGT tile covers lat_tile to lat_tile+1, lon_tile to lon_tile+1
+            # Row 0 of tile = lat_tile+1 (north), row 3600 = lat_tile (south)
+            tile_north = float(lat_tile + 1)
+            tile_south = float(lat_tile)
+            tile_west  = float(lon_tile)
+            tile_east  = float(lon_tile + 1)
+
+            # Convert sample coordinates to tile pixel indices
+            # tile pixel: row = (tile_north - lat) / 1.0 * 3600 (float)
+            #             col = (lon - tile_west)   / 1.0 * 3600
+            for r, lat in enumerate(sample_lats):
+                if not (tile_south <= lat <= tile_north):
+                    continue
+                pr = (tile_north - lat) / 1.0 * 3600.0
+                pr0 = int(np.clip(np.floor(pr), 0, 3599))
+                pr1 = min(pr0 + 1, 3600)
+                wr1 = pr - pr0
+                wr0 = 1.0 - wr1
+
+                for c, lon in enumerate(sample_lons):
+                    if not (tile_west <= lon <= tile_east):
+                        continue
+                    pc = (lon - tile_west) / 1.0 * 3600.0
+                    pc0 = int(np.clip(np.floor(pc), 0, 3599))
+                    pc1 = min(pc0 + 1, 3600)
+                    wc1 = pc - pc0
+                    wc0 = 1.0 - wc1
+
+                    # Bilinear interpolation
+                    v = (wr0 * wc0 * tile[pr0, pc0] +
+                         wr0 * wc1 * tile[pr0, pc1] +
+                         wr1 * wc0 * tile[pr1, pc0] +
+                         wr1 * wc1 * tile[pr1, pc1])
+                    if not np.isnan(v):
+                        result[r, c] = float(v)
+
+    # Fill any remaining NaN with nearest valid value
+    nan_mask = np.isnan(result)
+    if nan_mask.any() and not nan_mask.all():
+        from scipy.ndimage import distance_transform_edt
+        idx = distance_transform_edt(nan_mask, return_distances=False, return_indices=True)
+        result[nan_mask] = result[tuple(idx[:, nan_mask])]
+
+    return result
 
 
 # ── Pipeline ───────────────────────────────────────────────────────────────────
@@ -216,25 +205,20 @@ async def _run_area_pipeline(
     skip_osm: bool,
     tmp_dir: str,
 ) -> dict:
-    """Run the terrain/hydrology pipeline on a pre-built elevation grid."""
-    from app.geo.terrain_builder import ElevationGrid
-
-    # Build ElevationGrid from fetched data
+    """Run terrain/hydrology pipeline on pre-built elevation grid."""
     elev_grid_obj = ElevationGrid(
         data=elev_data,
         bbox=bbox,
         rows=grid_rows,
         cols=grid_cols,
         nan_fraction=0.0,
-        interpolation_method="srtm_open_elevation",
+        interpolation_method="srtm_hgt_local",
     )
     elev_grid = elev_grid_obj.data
 
-    # Compute slope
     slope_grid_obj = compute_slope(elev_grid, bbox)
     slope_grid = slope_grid_obj.data
 
-    # Hydrology
     hydro = run_hydrology(
         elev_grid=elev_grid,
         bbox=bbox,
@@ -243,7 +227,6 @@ async def _run_area_pipeline(
         tmp_dir=tmp_dir,
     )
 
-    # Terrain water detection
     terrain_water = detect_terrain_water(
         elev_grid=elev_grid,
         slope_grid=slope_grid,
@@ -256,7 +239,6 @@ async def _run_area_pipeline(
         max_coverage_pct=65.0,
     )
 
-    # OSM water exclusion
     osm_result: OSMWaterResult = fetch_osm_water_mask(
         bbox=bbox,
         grid_shape=elev_grid.shape,
@@ -264,13 +246,11 @@ async def _run_area_pipeline(
         skip_osm=skip_osm,
     )
 
-    # Combined exclusion mask
     combined_exclusion_mask = hydro.exclusion_mask.copy()
-    combined_exclusion_mask = combined_exclusion_mask | terrain_water.water_mask
+    combined_exclusion_mask |= terrain_water.water_mask
     if osm_result.found and osm_result.water_mask is not None:
-        combined_exclusion_mask = combined_exclusion_mask | osm_result.water_mask
+        combined_exclusion_mask |= osm_result.water_mask
 
-    # Select candidates
     candidates = select_top_candidates(
         elev_grid=elev_grid,
         slope_grid=slope_grid,
@@ -283,7 +263,6 @@ async def _run_area_pipeline(
         min_separation_cells=15,
     )
 
-    # Catchment delineation for each candidate
     candidate_results = []
     for rank, cand in enumerate(candidates):
         try:
@@ -310,15 +289,20 @@ async def _run_area_pipeline(
             continue
 
     _, candidate, pour_point, catchment = candidate_results[0]
-    lon_cell_m, lat_cell_m = approx_cell_size_m(bbox, elev_grid_obj.shape)
 
-    # ── Build input_boundary GeoJSON (the drawn bbox as a polygon) ──────────────
-    input_boundary_geojson = _bbox_to_polygon(bbox)
+    input_boundary_geojson = {
+        "type": "Polygon",
+        "coordinates": [[
+            [bbox.west,  bbox.south],
+            [bbox.east,  bbox.south],
+            [bbox.east,  bbox.north],
+            [bbox.west,  bbox.north],
+            [bbox.west,  bbox.south],
+        ]],
+    }
 
-    # ── Build all_candidates list ──────────────────────────────────────────────
     all_candidates_full = []
     for rank, cand, pp, cat in candidate_results:
-        # cat is a CatchmentResult dataclass — access attributes directly
         all_candidates_full.append({
             "rank":              rank,
             "longitude":         cand.lon,
@@ -337,14 +321,12 @@ async def _run_area_pipeline(
             },
         })
 
-    # Best candidate
     best_c = all_candidates_full[0]
 
     return {
         "status": "success",
         "input_source": "area",
         "input_boundary": input_boundary_geojson,
-        # Rank-1 summary (backward compat)
         "pond_location": {
             "longitude":         best_c["longitude"],
             "latitude":          best_c["latitude"],
@@ -368,18 +350,4 @@ async def _run_area_pipeline(
             "water_body_names":   osm_result.feature_names if osm_result.found else [],
         },
         "water_volume": estimate_water_volume(catchment.area_sq_m),
-    }
-
-
-def _bbox_to_polygon(bbox: BBox) -> dict:
-    """Convert a BBox to a GeoJSON Polygon (closed ring)."""
-    return {
-        "type": "Polygon",
-        "coordinates": [[
-            [bbox.west,  bbox.south],
-            [bbox.east,  bbox.south],
-            [bbox.east,  bbox.north],
-            [bbox.west,  bbox.north],
-            [bbox.west,  bbox.south],   # close ring
-        ]],
     }

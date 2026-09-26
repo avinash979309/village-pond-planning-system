@@ -5,15 +5,15 @@ import 'leaflet-draw/dist/leaflet.draw.css'
 import 'leaflet-draw'
 
 /**
- * DrawControl — adds leaflet-draw rectangle + polygon tools to the map.
- * Calls onBoundsSelected(bounds) when user finishes drawing.
- * Clears previous shape on new draw.
- * Only shows the toolbar when enabled=true.
+ * DrawControl — rectangle-only draw tool for selecting analysis area.
+ * No polygon (auto-close bug). Rectangle = clean 2-click draw.
+ * Calls onBoundsSelected(bounds) on finish, onBoundsSelected(null) on delete.
  */
 export default function DrawControl({ onBoundsSelected, enabled }) {
   const map = useMap()
   const drawnItemsRef = useRef(null)
   const controlRef    = useRef(null)
+  const handlerRef    = useRef(null)
 
   useEffect(() => {
     const drawnItems = new L.FeatureGroup()
@@ -24,14 +24,16 @@ export default function DrawControl({ onBoundsSelected, enabled }) {
       position: 'topleft',
       draw: {
         rectangle: {
-          shapeOptions: { color: '#1565C0', weight: 2, fillOpacity: 0.08 },
+          shapeOptions: {
+            color: '#1565C0',
+            weight: 2.5,
+            fillOpacity: 0.08,
+            dashArray: null,
+          },
           showArea: true,
+          metric: true,
         },
-        polygon: {
-          shapeOptions: { color: '#1565C0', weight: 2, fillOpacity: 0.08 },
-          showArea: true,
-          allowIntersection: false,
-        },
+        polygon:      false,
         polyline:     false,
         circle:       false,
         circlemarker: false,
@@ -50,30 +52,31 @@ export default function DrawControl({ onBoundsSelected, enabled }) {
       drawnItems.addLayer(e.layer)
       onBoundsSelected(e.layer.getBounds())
     }
-
-    const onDeleted = () => {
-      onBoundsSelected(null)
+    const onDeleted = () => onBoundsSelected(null)
+    const onEdited  = (e) => {
+      e.layers.eachLayer(layer => onBoundsSelected(layer.getBounds()))
     }
 
     map.on(L.Draw.Event.CREATED, onCreated)
     map.on(L.Draw.Event.DELETED, onDeleted)
+    map.on(L.Draw.Event.EDITED,  onEdited)
 
     return () => {
       map.off(L.Draw.Event.CREATED, onCreated)
       map.off(L.Draw.Event.DELETED, onDeleted)
-      try { map.removeLayer(drawnItems) }  catch (_) {}
+      map.off(L.Draw.Event.EDITED,  onEdited)
+      try { map.removeLayer(drawnItems)    } catch (_) {}
       try { map.removeControl(drawControl) } catch (_) {}
     }
   }, [map]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Add/remove control when enabled changes
+  // Show/hide toolbar when enabled changes
   useEffect(() => {
     if (!controlRef.current) return
     if (enabled) {
-      try { map.addControl(controlRef.current) }    catch (_) {}
+      try { map.addControl(controlRef.current) } catch (_) {}
     } else {
       try { map.removeControl(controlRef.current) } catch (_) {}
-      // Clear any drawn shapes when disabled
       if (drawnItemsRef.current) drawnItemsRef.current.clearLayers()
     }
   }, [enabled, map])
