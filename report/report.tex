@@ -1,0 +1,404 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[a4paper, top=2.5cm, bottom=2.5cm, left=2.8cm, right=2.8cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{parskip}
+\usepackage{setspace}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage{caption}
+
+\hypersetup{
+    colorlinks=false,
+    linkcolor=black,
+    urlcolor=black,
+}
+
+\setstretch{1.3}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{8pt}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  tabsize=4,
+  showstringspaces=false,
+  xleftmargin=0.5em,
+  xrightmargin=0.5em,
+}
+
+% -----------------------------------------------------------
+\begin{document}
+
+% Title block
+\begin{center}
+  {\Large \textbf{AI-Based Village Pond Planning System}} \\[0.5em]
+  {\large Assignment 1 Report} \\[0.3em]
+  Computer System Design \\[0.3em]
+  Avinash \quad | \quad September 2026 \\[0.3em]
+  \textbf{GitHub:} \url{https://github.com/avinash979309/village-pond-planning-system}
+\end{center}
+
+\vspace{0.5em}
+\hrule
+\vspace{1em}
+
+% -----------------------------------------------------------
+\section*{1. Introduction}
+
+The goal of this assignment was to build a backend API that can automatically
+identify the best location for a village pond given a contour map of an area.
+Village ponds are important for rural water storage, and picking the right site
+matters a lot -- it needs to be at a low-lying spot that collects rainwater
+from a large area, and should not be placed on top of existing rivers or canals.
+
+Instead of doing this manually, the system takes a KML contour map as input,
+runs terrain and hydrology analysis, and gives back the best pond location
+along with the catchment area (the region that drains into that point).
+
+The API is built in Python using FastAPI and can be tested with a simple
+curl command or through the browser.
+
+% -----------------------------------------------------------
+\section*{2. GitHub Repository}
+
+\textbf{Link:} \url{https://github.com/avinash979309/village-pond-planning-system}
+
+The repository has the full source code, the sample contour map, and a helper
+shell script to run the analysis from the command line.
+
+\textbf{Folder structure:}
+
+\begin{lstlisting}
+village-pond-planning-system/
+|-- backend/
+|   |-- app/
+|   |   |-- main.py                          # entry point + /analyzeContour
+|   |   |-- services/
+|   |   |   `-- contour_analysis_service.py  # orchestrates the pipeline
+|   |   `-- geo/
+|   |       |-- kml_parser.py
+|   |       |-- terrain_builder.py
+|   |       |-- hydrology_engine.py
+|   |       |-- osm_water_fetcher.py
+|   |       |-- pond_candidate_selector.py
+|   |       `-- catchment_delineator.py
+|   `-- requirements.txt
+|-- maps/
+|   `-- sample_contour_map.kml    # sample input (Shivnath river area)
+|-- generate_results.sh           # saves output as result.geojson
+|-- result.geojson
+`-- README.md
+\end{lstlisting}
+
+% -----------------------------------------------------------
+\section*{3. Working API Route}
+
+\textbf{How to run the server:}
+
+\begin{lstlisting}[language=bash]
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --port 8000
+\end{lstlisting}
+
+The server will start at \texttt{http://localhost:8000}. There are three routes:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Method & Endpoint & What it does \\
+\midrule
+GET  & \texttt{/}              & Returns API info \\
+GET  & \texttt{/api/v1/health} & Health check \\
+POST & \texttt{/analyzeContour}& Main analysis (upload KML, get result) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Testing the main route:}
+
+\begin{lstlisting}[language=bash]
+# curl (single line, no backslash)
+curl -X POST http://localhost:8000/analyzeContour \
+  -F "file=@maps/sample_contour_map.kml"
+
+# OR use the helper script
+./generate_results.sh maps/sample_contour_map.kml
+\end{lstlisting}
+
+You can also use the Swagger UI at \texttt{http://localhost:8000/docs} -- it
+lets you upload a file directly from the browser without any curl commands.
+
+\textbf{Example response:}
+
+\begin{lstlisting}
+{
+  "status": "success",
+  "pond_location": {
+    "longitude": 81.2944,
+    "latitude": 21.2439,
+    "elevation_m": 282.0,
+    "suitability_score": 0.8822
+  },
+  "pour_point": {
+    "longitude": 81.2951,
+    "latitude": 21.2441
+  },
+  "catchment": {
+    "area_km2": 0.0139,
+    "area_m2": 13851.0,
+    "avg_elevation_m": 290.4,
+    "boundary_geojson": { "type": "Polygon", "coordinates": ["..."] }
+  },
+  "all_candidates": [
+    { "rank": 1, "suitability_score": 0.8822, "catchment_area_km2": 0.0139 },
+    { "rank": 2, "suitability_score": 0.8800, "catchment_area_km2": 0.0004 }
+  ],
+  "osm_water_exclusion": {
+    "water_bodies_found": true,
+    "water_body_count": 11,
+    "water_body_names": ["Shivnath", "sivnath river", "canal"]
+  }
+}
+\end{lstlisting}
+
+% -----------------------------------------------------------
+\section*{4. Catchment Estimation Approach}
+
+The system follows a standard hydrology pipeline to estimate the catchment
+area for each candidate pond site. The steps are explained below.
+
+\subsection*{4.1 Parsing the KML file}
+
+The uploaded KML file is read using the \texttt{lxml} library. Each contour
+line is a \texttt{<Placemark>} inside the KML. The parser pulls out the
+vertex coordinates (longitude, latitude) and the elevation of each line from
+the placemark name. It also calculates the bounding box of the whole area.
+
+\subsection*{4.2 Building the Elevation Grid (DEM)}
+
+Contour lines only give elevation at certain positions. To do hydrology
+analysis we need elevation at every point on a grid. So the system takes all
+the contour vertices as scattered $(x, y, z)$ points and uses
+\textbf{SciPy linear interpolation} (\texttt{scipy.interpolate.griddata})
+to fill in a regular $200 \times 200$ grid. Any leftover empty cells are
+filled using nearest-neighbour interpolation.
+
+The result is a Digital Elevation Model (DEM) -- a 2D array where each cell
+has an elevation value in metres.
+
+\subsection*{4.3 Conditioning the DEM}
+
+Raw DEMs often have ``sinks'' -- cells that are lower than all their
+neighbours with no way for water to flow out. These break the flow analysis.
+The library \textbf{pysheds} is used to:
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Fill sinks} -- raise the elevation of trapped cells until
+        water can flow out.
+  \item \textbf{Resolve flats} -- add a tiny slope to completely flat areas
+        so the flow direction is not ambiguous.
+\end{itemize}
+
+\subsection*{4.4 D8 Flow Direction and Accumulation}
+
+The \textbf{D8 algorithm} is used to model how water flows across the terrain.
+For each cell, it looks at all 8 neighbours and sends the flow to the one
+that is steepest downhill:
+
+\[
+\text{flow direction of cell}_{ij} = \arg\max_{k \in \{1 \ldots 8\}}
+\left( \frac{z_{ij} - z_k}{L_k} \right)
+\]
+
+Here $z_{ij}$ is the elevation of the cell, $z_k$ is the neighbour's
+elevation, and $L_k$ is the distance (1 for up/down/left/right, $\sqrt{2}$
+for diagonal).
+
+After flow directions are assigned, \textbf{flow accumulation} is calculated --
+each cell gets a count of how many upstream cells drain through it. Cells
+with very high accumulation are major drainage channels (rivers, streams).
+The top 2\% are flagged and excluded from pond site selection.
+
+\subsection*{4.5 Excluding Existing Water Bodies}
+
+Before picking pond sites, the system removes locations that already have
+water. Two methods are used:
+
+\textbf{OpenStreetMap (OSM):} The Overpass API is queried to download polygons
+of all rivers, lakes, and canals in the study area. Candidate cells inside
+these polygons are excluded. The query uses multiple mirror servers in case
+one is down.
+
+\textbf{Terrain-based fallback:} If OSM is unreachable, cells that are both
+very low-lying and have high flow accumulation are removed as likely river
+corridors.
+
+\subsection*{4.6 Scoring and Selecting Candidates}
+
+Each remaining cell gets a score from 0 to 1 based on four things:
+
+\begin{center}
+\begin{tabular}{llr}
+\toprule
+Factor & Reason & Weight \\
+\midrule
+Low elevation relative to surroundings & Water naturally collects here & 30\% \\
+Gentle slope                           & Stable site for construction  & 25\% \\
+High flow accumulation                 & Large area drains into it     & 35\% \\
+Distance from rivers/exclusion zones   & Safety buffer                 & 10\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The top 3 candidates are picked, with a minimum spatial separation between
+them so they are not all in the same spot.
+
+\subsection*{4.7 Delineating the Catchment}
+
+Once the best site is chosen, the catchment is computed:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Snap to pour point} -- the candidate is moved to the nearest
+        high-accumulation cell within a small search radius. This ensures it
+        sits exactly on the drainage channel.
+  \item \textbf{Trace upstream} -- pysheds follows the D8 flow directions
+        backwards from the pour point, marking every cell that eventually
+        drains into it. This set of cells is the catchment.
+  \item \textbf{Calculate area} -- the number of catchment cells is multiplied
+        by the area of one cell:
+        \[
+        A_{\text{cell}} =
+          \frac{\Delta\text{lon} \cdot 111{,}320 \cdot \cos(\phi)}{N}
+          \times
+          \frac{\Delta\text{lat} \cdot 110{,}574}{N}
+          \quad [\text{m}^2]
+        \]
+        where $\phi$ is the mean latitude and $N = 200$ is the grid size.
+  \item \textbf{Get boundary} -- the raster mask is converted to a GeoJSON
+        Polygon using Shapely, which is returned in the API response.
+\end{enumerate}
+
+% -----------------------------------------------------------
+\section*{5. Demonstration using the Sample Contour Map}
+
+The sample map provided (\texttt{maps/sample\_contour\_map.kml}) covers a
+roughly 1 km\textsuperscript{2} area in the Shivnath river region in central
+India (around $21.24°\,\text{N},\ 81.29°\,\text{E}$). It contains multiple
+closed contour lines and the Shivnath river and some canals pass through the
+lower part of the area.
+
+\textbf{Command used:}
+\begin{lstlisting}[language=bash]
+./generate_results.sh maps/sample_contour_map.kml
+\end{lstlisting}
+
+\textbf{Result:}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Field & Value \\
+\midrule
+Pond Location (Rank 1) & $81.2944°\,\text{E},\ 21.2439°\,\text{N}$ \\
+Elevation              & 282.0 m \\
+Suitability Score      & 0.8822 / 1.0 \\
+Pour Point             & $81.2951°\,\text{E},\ 21.2441°\,\text{N}$ \\
+Catchment Area         & 0.0139 km\textsuperscript{2} (13,851 m\textsuperscript{2}) \\
+Avg Catchment Elevation& 290.4 m \\
+Candidates found       & 2 \\
+OSM features excluded  & Shivnath, sivnath river, canal (11 total) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The recommended location is slightly lower than its surroundings at 282 m,
+which makes sense as a water collection point. The catchment of
+$\approx$0.014 km\textsuperscript{2} means about 14,000 m\textsuperscript{2}
+of land drains into this spot -- around 1.4\% of the whole map area, which is
+a reasonable contributing area for a small village pond.
+
+The OSM layer correctly excluded the Shivnath river and the canals, so the
+recommended site is not on or near an existing waterway. The suitability
+score of 0.88 shows it is a good site overall.
+
+To visualize: drag the generated \texttt{result.geojson} file into
+\href{https://geojson.io}{\texttt{geojson.io}} to see the pond location and
+catchment polygon on the map.
+
+% -----------------------------------------------------------
+\section*{6. API Documentation}
+
+\subsection*{Parameters for \texttt{POST /analyzeContour}}
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+Parameter & Type & Default & Description \\
+\midrule
+\texttt{file}                    & file  & --    & KML or KMZ file (required) \\
+\texttt{grid\_resolution}        & int   & 200   & DEM grid size per axis \\
+\texttt{drainage\_threshold\_pct}& float & 2.0   & Top-N\% flow cells = drainage \\
+\texttt{drainage\_buffer\_cells} & int   & 2     & Buffer around drainage cells \\
+\texttt{snap\_radius\_cells}     & int   & 5     & Pour-point snap search radius \\
+\texttt{skip\_osm}               & bool  & false & Skip OSM (offline/faster mode) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{Error responses}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Code & When & Response \\
+\midrule
+422 & File field missing or wrong type & \texttt{\{"detail": [...]\}} \\
+400 & KML/KMZ cannot be parsed         & \texttt{\{"status": "error", ...\}} \\
+500 & Analysis failed internally        & \texttt{\{"status": "error", ...\}} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{Tech stack}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Library & Purpose \\
+\midrule
+FastAPI + Uvicorn & REST API and web server \\
+lxml + Shapely    & KML parsing and geometry \\
+NumPy + SciPy     & DEM interpolation \\
+pysheds           & D8 flow, sink fill, catchment delineation \\
+httpx             & Overpass API requests \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% -----------------------------------------------------------
+\section*{7. Conclusion}
+
+The system works as intended. Given a KML contour map, it automatically
+identifies a suitable pond location by analysing terrain and drainage patterns,
+excluding existing rivers using OpenStreetMap data, and returning a catchment
+polygon and suitability score.
+
+The demo on the Shivnath river area produces a geographically reasonable
+result -- the chosen site avoids the river, sits at a natural low point, and
+has a sensible catchment area.
+
+All code is available at:\\
+\url{https://github.com/avinash979309/village-pond-planning-system}
+
+\end{document}

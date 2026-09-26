@@ -54,6 +54,7 @@ from app.geo.hydrology_engine import run_hydrology
 from app.geo.pond_candidate_selector import select_pond_candidate, select_top_candidates, DEFAULT_WEIGHTS
 from app.geo.catchment_delineator import snap_to_pour_point, delineate_catchment
 from app.geo.utils import approx_cell_size_m
+from app.geo.water_volume import estimate_water_volume
 
 
 async def analyze_contour(
@@ -496,6 +497,7 @@ async def _run_pipeline(
             "multi_candidate_method": "iterative spatial suppression — circular exclusion zone per pick",
             "weights": DEFAULT_WEIGHTS,
         },
+        "water_volume": estimate_water_volume(catchment.area_sq_m),
     }
 
 

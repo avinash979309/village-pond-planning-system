@@ -1,0 +1,277 @@
+%%
+%% CSD Assignment 1 - Final Technical Report Template
+%% Based on the ACM "acmart" manuscript (single-column) style.
+%% Fill in every section marked [FILL IN]. Delete the guidance
+%% text (in italics) once you have written your own content.
+%%
+\documentclass[manuscript,screen,review]{acmart}
+
+\AtBeginDocument{%
+  \providecommand\BibTeX{{Bib\TeX}}}
+
+%% ------------------------------------------------------------------
+%% This is a COURSE ASSIGNMENT report, not an ACM publication, so the
+%% rights-management / DOI / ISBN block from the original ACM sample
+%% is not required. It is left commented out below in case your
+%% instructor asks you to keep the ACM-style header block.
+%% ------------------------------------------------------------------
+% \setcopyright{acmlicensed}
+% \acmConference[CSD Assignment 1]{Course: Computer Science and Design}{2026}{Your Institute}
+% \acmISBN{}
+
+\begin{document}
+
+%% =================== TITLE & AUTHOR BLOCK =========================
+\title{AI-based Village Pond Planning System}
+\subtitle{CSD Assignment 1 -- Final Technical Report}
+
+\author{Your Full Name}
+\affiliation{%
+  \institution{Your Institute / Department}
+  \city{Your City}
+  \country{India}}
+\email{your.email@institute.ac.in}
+
+%% Add more \author{} + \affiliation{} + \email{} blocks here if this
+%% is a group project. Keep one block per team member.
+
+\renewcommand{\shortauthors}{Your Surname et al.}
+
+%% =================== ABSTRACT ======================================
+\begin{abstract}
+\textit{[FILL IN -- 150--250 words.]} Summarize the problem (rural
+water conservation and pond-site selection), the approach (geospatial
++ rainfall data analysis exposed through a web application), the key
+system components you built, and the main results (e.g., number of
+candidate sites evaluated, accuracy/usefulness of the recommended
+pond depth and storage capacity, and any performance figures for the
+system itself).
+\end{abstract}
+
+\keywords{Village Pond Planning, Geospatial Analysis, Rainwater
+  Harvesting, Catchment Estimation, Web GIS, REST APIs}
+
+\maketitle
+
+%% =====================================================================
+\section{Introduction}
+\label{sec:intro}
+\textit{[MUST BE INCLUDED]} Introduce the problem of rural water conservation
+and why pond-based rainwater harvesting is an effective solution.
+State the goal of the assignment (an AI/geospatial-assisted web
+application that recommends suitable pond locations) and give a short
+roadmap of the rest of the report.
+
+\subsection{Motivation}
+\textit{[FILL IN]} Explain, in your own words, why manual site
+selection is hard (terrain complexity, lack of centralized rainfall
+data, unavailability of land-ownership records, etc.) and why an
+automated tool helps village administrators.
+
+\subsection{Scope of the Project}
+\textit{[MUST BE INCLUDED]} List, in one paragraph or a short bullet list, what
+your system does and does \emph{not} cover (e.g., "estimates catchment
+area and expected runoff for a user-selected point; does not perform
+structural/civil engineering design of the pond embankment").
+
+%% =====================================================================
+\section{Problem Statement and Requirements}
+\label{sec:requirements}
+\textit{[MUST BE INCLUDED]} Restate the assignment's functional requirements in
+your own words and map each to the module of your system that
+satisfies it. A table works well here.
+
+\begin{table}[h]
+  \caption{Functional requirements and where they are implemented}
+  \label{tab:requirements}
+  \begin{tabular}{p{3.6cm}p{3.6cm}}
+    \toprule
+    Requirement & Implemented in \\
+    \midrule
+    Satellite imagery display & \textit{[module/file]} \\
+    Contour map visualization & \textit{[module/file]} \\
+    Available-land identification & \textit{[module/file]} \\
+    Catchment area estimation & \textit{[module/file]} \\
+    Historical rainfall query & \textit{[module/file]} \\
+    Runoff volume estimation & \textit{[module/file]} \\
+    Pond depth / storage recommendation & \textit{[module/file]} \\
+    Combined overlay / results view & \textit{[module/file]} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Non-Functional Requirements}
+\textit{[MUST BE INCLUDED]} State performance, scalability, availability,
+usability, and security requirements you set for yourself, e.g.
+response time for a query, number of concurrent users the system
+should tolerate, expected uptime, browser support, etc.
+
+
+%% =====================================================================
+\section{System Architecture and High-Level Design}
+\label{sec:architecture}
+\textit{[MUST BE INCLUDED]} Describe the overall architecture: client, server,
+database, and external API layers. Include an architecture diagram
+(Figure~\ref{fig:architecture}) showing how data flows from the map
+UI to the backend, to the elevation/rainfall APIs, to the database,
+and back.
+
+\begin{figure}[h]
+  \centering
+  % \includegraphics[width=\linewidth]{architecture-diagram}
+  \caption{High-level system architecture.}
+  \label{fig:architecture}
+  \Description{Replace with an accurate description of your
+    architecture diagram for accessibility.}
+\end{figure}
+
+\subsection{Technology Stack}
+\textit{[MUST BE INCLUDED]} List the actual stack you used (language, web
+framework, database, frontend library/framework, mapping library,
+and which elevation/rainfall APIs you queried). Justify any deviation
+from the suggested stack in the assignment brief.
+
+%% =====================================================================
+\section{Methodology}
+\label{sec:methodology}
+[MUST BE INCLUDED] This section should explain the actual algorithms and data pipelines
+you implemented -- this is the core of the "Terrain and Catchment
+Analysis" evaluation criterion, so be specific and quantitative.
+
+\subsection{Terrain and Elevation Analysis}
+\textit{[FILL IN]} Explain how you obtained and processed the
+Digital Elevation Model (DEM) / elevation API data, how contour lines
+were generated, and how you used OpenCV (or your chosen library) for
+any image/terrain processing.
+
+\subsection{Catchment Area Delineation}
+\textit{[FILL IN]} Explain the algorithm used to estimate the
+catchment area contributing runoff to a candidate point (e.g.,
+flow-direction/flow-accumulation from the DEM, or a simplified
+buffer/slope-based heuristic). State assumptions and limitations.
+
+\subsection{Rainfall Data Integration}
+\textit{[FILL IN]} Describe which rainfall API(s) you queried (IMD,
+Open-Meteo, NASA POWER, etc.), the time range of historical data
+used, and how you aggregated it into annual/seasonal statistics.
+
+%% =====================================================================
+\section{Implementation}
+\label{sec:implementation}
+
+\subsection{Backend and API Design}
+\textit{[MUST BE INCLUDED]} List your REST/GraphQL endpoints (a table of
+\texttt{METHOD /path -- purpose} works well), authentication approach
+if any, and how errors from third-party APIs are handled.
+
+\subsection{Frontend and Visualization}
+\textit{[MUST BE INCLUDED]} Describe the map interface, the visualization
+library used, and how the results overlay (site, catchment boundary,
+rainfall stats, runoff volume, pond dimensions) is presented to the
+user. Include a screenshot.
+
+\begin{figure}[h]
+  \centering
+  % \includegraphics[width=\linewidth]{ui-screenshot}
+  \caption{Application interface showing the results overlay.}
+  \label{fig:ui}
+  \Description{Replace with an accurate description of the screenshot.}
+\end{figure}
+
+\subsection{Database and Storage}
+\textit{[FILL IN]} Explain how spatial data, rainfall records, and
+computed recommendations are persisted and queried.
+
+%% =====================================================================
+\section{CSD Themes and Topics Applied in the Project}
+\label{sec:csd-themes}
+\textit{[MUST BE INCLUDED] This section is where you explicitly connect your
+implementation back to core Computer System Design (CSD)
+concepts taught in the course. For every theme you list, name the
+concrete component of your system where it appears and justify why
+you made that design choice (not just that the feature exists).
+Add or remove rows/subsections to match what you actually built --
+do not claim a theme you did not implement.}
+
+\begin{table*}[t]
+  \caption{Mapping of core CSD themes/topics to their use in this project}
+  \label{tab:csd-themes}
+  \begin{tabular}{p{2.8cm}p{5.2cm}p{6.5cm}}
+    \toprule
+    CSD Theme/Topic & Where used in the project & Justification / design rationale \\
+    \midrule
+    API Design (REST) & \textit{[e.g., \texttt{/api/catchment}, \texttt{/api/rainfall}]} & \textit{[Why REST, versioning, request/response contract]} \\
+    Load Balancing & \textit{[e.g., Nginx in front of N app instances]} & \textit{[Why needed -- concurrent map queries, API rate limits, etc.]} \\
+    Caching & \textit{[e.g., cached rainfall API responses / tile cache]} & \textit{[Reduces external API calls, improves latency]} \\
+    Database Indexing / Query Optimization & \textit{[e.g., spatial index on site coordinates]} & \textit{[Speeds up geospatial queries]} \\
+    Concurrency / Asynchronous Processing & \textit{[e.g., async calls to elevation + rainfall APIs]} & \textit{[Avoids blocking the UI while multiple APIs are queried]} \\
+    Microservices vs. Monolith & \textit{[state which you chose]} & \textit{[Trade-offs you considered]} \\
+    Design Patterns & \textit{[e.g., Factory for API clients, Strategy for runoff models]} & \textit{[Why the pattern fit the problem]} \\
+    Authentication / Authorization & \textit{[if applicable]} & \textit{[Who can trigger analyses / view admin data]} \\
+    Containerization / Deployment & \textit{[e.g., Docker, docker-compose]} & \textit{[Reproducible environment, ease of grading/demo]} \\
+    Error Handling and Resilience & \textit{[e.g., retries/fallbacks when a rainfall API is down]} & \textit{[System should degrade gracefully]} \\
+    Algorithms and Complexity & \textit{[e.g., flow-accumulation algorithm complexity]} & \textit{[Why this algorithm was chosen over alternatives]} \\
+    Testing Strategy & \textit{[unit/integration/system tests -- see Section~\ref{sec:testing}]} & \textit{[What confidence this gives in correctness]} \\
+    Version Control / CI-CD & \textit{[e.g., GitHub Actions pipeline]} & \textit{[How it kept the team in sync / caught regressions]} \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\textit{[FILL IN]} Add a short paragraph after the table walking
+through the two or three themes you consider most significant to
+this project and explaining, in more depth, the specific engineering
+decision behind each (e.g., "We added a load balancer because X" or
+"We chose not to implement microservices because Y").
+
+%% =====================================================================
+\section{Results and Evaluation}
+\label{sec:results}
+\textit{[MUST BE INCLUDED]} Present representative results: example
+village/site with its computed catchment area, rainfall statistics,
+estimated runoff, and recommended pond dimensions. Include maps or
+charts (Figure~\ref{fig:results}) and, if possible, compare your
+estimated values against any ground-truth or published reference
+figures.
+
+\begin{figure}[h]
+  \centering
+  % \includegraphics[width=\linewidth]{results-overlay}
+  \caption{Example results overlay for a selected village.}
+  \label{fig:results}
+  \Description{Replace with an accurate description of the results
+    figure.}
+\end{figure}
+
+\subsection{Performance}
+\textit{[MUST BE INCLUDED]} Report response times for key operations (e.g.,
+time to fetch rainfall data, time to compute catchment area for a
+given site) and how the system behaves under load if you tested that.
+
+%% =====================================================================
+\section{Discussion and Limitations}
+\label{sec:discussion}
+\textit{[FILL IN]} Reflect honestly on what worked well, what did
+not, data-quality issues (e.g., coarse DEM resolution, gaps in
+rainfall records), and any simplifying assumptions that affect the
+accuracy of the recommendations.
+
+%% =====================================================================
+\section{AI Tool Usage Declaration}
+\label{sec:ai-usage}
+\textit{[MUST BE INCLUDED -- required by the assignment's LLM Usage Policy.]}
+State which AI tools (ChatGPT, Claude, Gemini, GitHub Copilot, etc.)
+were used, for which specific tasks (brainstorming, debugging,
+documentation, refactoring, etc.) like AI was used to reformat this tempalte, and confirm that all AI-assisted
+code was reviewed, understood, and modified by the team before
+submission. Do not leave this section blank.
+
+
+%% =====================================================================
+\appendix
+
+\section{Source Code and Repository}
+\textit{[MUST BE INCLUDED]} Provide the repository link and a short note on
+its folder structure.
+
+\end{document}
+\endinput

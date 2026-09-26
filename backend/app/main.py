@@ -20,6 +20,9 @@ del _numpy_compat
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
 
 from app.config import settings
 from app.api.v1.router import api_router
@@ -191,5 +194,21 @@ async def analyze_contour_simple(file: UploadFile):
         # ── All candidates — each with pour_point + catchment polygon ─────────
         "all_candidates": all_candidates_full,
         "osm_water_exclusion": result.get("osm_water_exclusion", {}),
+        "water_volume": result.get("water_volume", {}),
     }
 
+
+# ── Serve React frontend ──────────────────────────────────────────────────────
+# Mount built frontend (frontend/dist/) at /app. Falls back if not built yet.
+_FRONTEND_DIST = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "frontend", "dist",
+)
+
+if os.path.isdir(_FRONTEND_DIST):
+    app.mount("/app", StaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")
+
+    @app.get("/ui", include_in_schema=False)
+    async def ui_redirect():
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="/app")
