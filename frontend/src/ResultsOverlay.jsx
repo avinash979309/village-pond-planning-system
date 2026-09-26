@@ -57,9 +57,10 @@ export default function ResultsOverlay({ data, inputBoundary }) {
           fillOpacity: 0.06,
           opacity: 0.85,
         },
+        // non-interactive: clicks pass through to pond/pour-point markers below
+        interactive: false,
       }
     )
-    layer.bindPopup('<b>Input Area Boundary</b><br/>The region provided for pond site analysis')
     layer.addTo(map)
     boundaryLayerRef.current = layer
 

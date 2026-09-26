@@ -1,85 +1,108 @@
 import { useEffect, useRef } from 'react'
 import { useMap } from 'react-leaflet'
 import L from 'leaflet'
-import 'leaflet-draw/dist/leaflet.draw.css'
-import 'leaflet-draw'
 
 /**
- * DrawControl — rectangle-only draw tool for selecting analysis area.
- * No polygon (auto-close bug). Rectangle = clean 2-click draw.
- * Calls onBoundsSelected(bounds) on finish, onBoundsSelected(null) on delete.
+ * RectangleDraw — when enabled, user can click-drag anywhere on the map
+ * to draw a rectangle. No toolbar, no extra clicks.
+ *
+ * UX:
+ *   mousedown → start corner
+ *   mousemove → live rectangle preview
+ *   mouseup   → finalise → calls onBoundsSelected(bounds)
+ *
+ * Map panning is disabled while drawing so drag creates rectangle not pan.
  */
-export default function DrawControl({ onBoundsSelected, enabled }) {
+export default function RectangleDraw({ onBoundsSelected, enabled }) {
   const map = useMap()
-  const drawnItemsRef = useRef(null)
-  const controlRef    = useRef(null)
-  const handlerRef    = useRef(null)
+  const rectRef     = useRef(null)   // live preview rectangle
+  const startLatLng = useRef(null)   // where mousedown happened
+  const drawing     = useRef(false)
 
   useEffect(() => {
-    const drawnItems = new L.FeatureGroup()
-    map.addLayer(drawnItems)
-    drawnItemsRef.current = drawnItems
+    const container = map.getContainer()
 
-    const drawControl = new L.Control.Draw({
-      position: 'topleft',
-      draw: {
-        rectangle: {
-          shapeOptions: {
-            color: '#1565C0',
-            weight: 2.5,
-            fillOpacity: 0.08,
-            dashArray: null,
-          },
-          showArea: true,
-          metric: true,
-        },
-        polygon:      false,
-        polyline:     false,
-        circle:       false,
-        circlemarker: false,
-        marker:       false,
-      },
-      edit: { featureGroup: drawnItems, remove: true },
-    })
-    controlRef.current = drawControl
+    const onMouseDown = (e) => {
+      if (!enabled) return
+      // Only respond to left-button clicks not on a control/marker
+      if (e.originalEvent.button !== 0) return
+      // Stop propagation so map click handler doesn't interfere
+      L.DomEvent.stop(e)
 
-    if (enabled) {
-      try { map.addControl(drawControl) } catch (_) {}
+      drawing.current = true
+      startLatLng.current = e.latlng
+
+      // Disable map drag while drawing
+      map.dragging.disable()
+
+      // Create initial zero-size rectangle
+      if (rectRef.current) { map.removeLayer(rectRef.current) }
+      rectRef.current = L.rectangle([e.latlng, e.latlng], {
+        color: '#1565C0',
+        weight: 2,
+        dashArray: '6 3',
+        fillOpacity: 0.08,
+        interactive: false,
+      }).addTo(map)
     }
 
-    const onCreated = (e) => {
-      drawnItems.clearLayers()
-      drawnItems.addLayer(e.layer)
-      onBoundsSelected(e.layer.getBounds())
-    }
-    const onDeleted = () => onBoundsSelected(null)
-    const onEdited  = (e) => {
-      e.layers.eachLayer(layer => onBoundsSelected(layer.getBounds()))
+    const onMouseMove = (e) => {
+      if (!drawing.current || !startLatLng.current || !rectRef.current) return
+      rectRef.current.setBounds(L.latLngBounds(startLatLng.current, e.latlng))
     }
 
-    map.on(L.Draw.Event.CREATED, onCreated)
-    map.on(L.Draw.Event.DELETED, onDeleted)
-    map.on(L.Draw.Event.EDITED,  onEdited)
+    const onMouseUp = (e) => {
+      if (!drawing.current) return
+      drawing.current = false
+      map.dragging.enable()
+
+      if (!startLatLng.current || !rectRef.current) return
+
+      const bounds = L.latLngBounds(startLatLng.current, e.latlng)
+
+      // Ignore tiny accidental clicks (< 0.003° ≈ 300m)
+      const latSpan = Math.abs(bounds.getNorth() - bounds.getSouth())
+      const lngSpan = Math.abs(bounds.getEast() - bounds.getWest())
+      if (latSpan < 0.003 || lngSpan < 0.003) {
+        // Too small — remove preview
+        map.removeLayer(rectRef.current)
+        rectRef.current = null
+        startLatLng.current = null
+        return
+      }
+
+      // Keep the final rectangle (solid)
+      rectRef.current.setStyle({ dashArray: null, fillOpacity: 0.1, weight: 2.5 })
+      onBoundsSelected(bounds)
+    }
+
+    map.on('mousedown', onMouseDown)
+    map.on('mousemove', onMouseMove)
+    map.on('mouseup',   onMouseUp)
 
     return () => {
-      map.off(L.Draw.Event.CREATED, onCreated)
-      map.off(L.Draw.Event.DELETED, onDeleted)
-      map.off(L.Draw.Event.EDITED,  onEdited)
-      try { map.removeLayer(drawnItems)    } catch (_) {}
-      try { map.removeControl(drawControl) } catch (_) {}
+      map.off('mousedown', onMouseDown)
+      map.off('mousemove', onMouseMove)
+      map.off('mouseup',   onMouseUp)
+      map.dragging.enable()
     }
-  }, [map]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [map, enabled, onBoundsSelected])
 
-  // Show/hide toolbar when enabled changes
+  // When disabled: remove the drawn rectangle, re-enable dragging
   useEffect(() => {
-    if (!controlRef.current) return
-    if (enabled) {
-      try { map.addControl(controlRef.current) } catch (_) {}
-    } else {
-      try { map.removeControl(controlRef.current) } catch (_) {}
-      if (drawnItemsRef.current) drawnItemsRef.current.clearLayers()
+    if (!enabled) {
+      map.dragging.enable()
+      drawing.current = false
+      startLatLng.current = null
+      if (rectRef.current) {
+        try { map.removeLayer(rectRef.current) } catch (_) {}
+        rectRef.current = null
+      }
+      onBoundsSelected(null)
     }
-  }, [enabled, map])
+    // Change cursor
+    map.getContainer().style.cursor = enabled ? 'crosshair' : ''
+  }, [enabled, map, onBoundsSelected])
 
   return null
 }

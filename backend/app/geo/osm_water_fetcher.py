@@ -41,16 +41,16 @@ from app.geo.utils import BBox, coords_to_grid_index
 
 logger = logging.getLogger(__name__)
 
-# Overpass API mirrors tried in order (fastest/most reliable first)
+# Overpass API mirrors tried in order
 _OVERPASS_MIRRORS = [
-    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass.openstreetmap.ru/api/interpreter",
 ]
 
-# Timeout per mirror in seconds (bbox water queries are heavier than test pings)
-_OVERPASS_TIMEOUT = 30
+# Timeout per mirror — keep short so total wait is bounded
+_OVERPASS_TIMEOUT = 15
 
 # Overpass QL query template:
 # Fetches all waterway polygons, natural water, and reservoir landuse
@@ -151,6 +151,11 @@ def fetch_osm_water_mask(
             response = httpx.post(
                 mirror_url,
                 data={"data": query},
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": "VillagePondPlanningSystem/1.0",
+                    "Accept": "application/json",
+                },
                 timeout=_OVERPASS_TIMEOUT,
             )
             response.raise_for_status()
