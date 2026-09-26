@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useMap, GeoJSON } from 'react-leaflet'
 import L from 'leaflet'
 
@@ -6,12 +6,17 @@ const RANK_COLORS = ['#27AE60', '#E67E22', '#8E44AD']
 const RANK_LABELS = ['Rank #1 (Best)', 'Rank #2', 'Rank #3']
 
 /**
- * ResultsOverlay — renders pond candidates + catchment polygons on the map.
+ * ResultsOverlay — renders:
+ *   1. Input area boundary (the KML bbox or drawn rectangle)
+ *   2. Pond candidates + catchment polygons on the map
+ *
  * Flies the map to fit all results when data changes.
  */
-export default function ResultsOverlay({ data }) {
+export default function ResultsOverlay({ data, inputBoundary }) {
   const map = useMap()
+  const boundaryLayerRef = useRef(null)
 
+  // ── Fly map to fit results ───────────────────────────────────────────────────
   useEffect(() => {
     if (!data) return
     const bounds = []
@@ -22,11 +27,46 @@ export default function ResultsOverlay({ data }) {
         poly.coordinates[0].forEach(([lng, lat]) => bounds.push([lat, lng]))
       }
     })
+    // Also include input boundary in fit
+    if (inputBoundary?.coordinates) {
+      inputBoundary.coordinates[0]?.forEach(([lng, lat]) => bounds.push([lat, lng]))
+    }
     if (bounds.length) {
       try { map.flyToBounds(L.latLngBounds(bounds), { padding: [40, 40], maxZoom: 14, duration: 1 }) }
       catch (_) {}
     }
-  }, [data, map])
+  }, [data, inputBoundary, map])
+
+  // ── Input boundary layer (imperative, so it sits under everything) ───────────
+  useEffect(() => {
+    // Remove old boundary layer if any
+    if (boundaryLayerRef.current) {
+      try { map.removeLayer(boundaryLayerRef.current) } catch (_) {}
+      boundaryLayerRef.current = null
+    }
+    if (!inputBoundary) return
+
+    const layer = L.geoJSON(
+      { type: 'Feature', geometry: inputBoundary },
+      {
+        style: {
+          color: '#1565C0',
+          weight: 2.5,
+          dashArray: '6 4',
+          fillColor: '#1565C0',
+          fillOpacity: 0.06,
+          opacity: 0.85,
+        },
+      }
+    )
+    layer.bindPopup('<b>Input Area Boundary</b><br/>The region provided for pond site analysis')
+    layer.addTo(map)
+    boundaryLayerRef.current = layer
+
+    return () => {
+      try { map.removeLayer(layer) } catch (_) {}
+    }
+  }, [inputBoundary, map])
 
   if (!data) return null
 

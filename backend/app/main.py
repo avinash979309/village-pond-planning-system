@@ -27,6 +27,7 @@ import os
 from app.config import settings
 from app.api.v1.router import api_router
 from app.services.contour_analysis_service import analyze_contour as _analyze_contour
+from app.services.area_analysis_service import analyze_area as _analyze_area
 
 app = FastAPI(
     title="Village Pond Planning System API",
@@ -172,8 +173,28 @@ async def analyze_contour_simple(file: UploadFile):
             },
         })
 
+    # Build input_boundary GeoJSON from the KML bbox (so the frontend can
+    # show the analysis area outline on the map).
+    # The service returns spatial_extent under result["input_summary"]["spatial_extent"]
+    input_boundary_geojson = None
+    spatial_extent = result.get("input_summary", {}).get("spatial_extent")
+    if spatial_extent:
+        se = spatial_extent
+        input_boundary_geojson = {
+            "type": "Polygon",
+            "coordinates": [[
+                [se["west"],  se["south"]],
+                [se["east"],  se["south"]],
+                [se["east"],  se["north"]],
+                [se["west"],  se["north"]],
+                [se["west"],  se["south"]],
+            ]],
+        }
+
     return {
         "status": "success",
+        "input_source": "kml",
+        "input_boundary": input_boundary_geojson,
         # ── Rank-1 summary (backward compat) ──────────────────────────────────
         "pond_location": {
             "longitude":        pond_coords[0] if pond_coords else None,
@@ -198,6 +219,54 @@ async def analyze_contour_simple(file: UploadFile):
     }
 
 
+# ── POST /analyzeArea — draw a rectangle on the map, get pond analysis ────────
+from pydantic import BaseModel
+
+class AreaRequest(BaseModel):
+    west:  float
+    south: float
+    east:  float
+    north: float
+
+@app.post(
+    "/analyzeArea",
+    tags=["Pond Analysis"],
+    summary="Analyze a selected map area and identify optimal pond locations",
+    description=(
+        "Pass the bounding box (west/south/east/north in WGS84 degrees) of a "
+        "user-drawn rectangle. The API fetches real SRTM 30m elevation data "
+        "(via Open-Elevation API), runs the full terrain + hydrology analysis, "
+        "and returns the same structured response as /analyzeContour. "
+        "No API key required. Area limit: 1° × 1° (~100 km × 100 km)."
+    ),
+)
+async def analyze_area_endpoint(req: AreaRequest):
+    """
+    POST /analyzeArea
+
+    Body JSON: {"west": float, "south": float, "east": float, "north": float}
+    Returns pond location, pour point, and catchment area as structured JSON.
+    """
+    def _run_in_thread():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(
+                _analyze_area(
+                    west=req.west,
+                    south=req.south,
+                    east=req.east,
+                    north=req.north,
+                )
+            )
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+    result = await asyncio.to_thread(_run_in_thread)
+    return result
+
+
 # ── Serve React frontend ──────────────────────────────────────────────────────
 # Mount built frontend (frontend/dist/) at /app. Falls back if not built yet.
 _FRONTEND_DIST = os.path.join(
@@ -212,3 +281,4 @@ if os.path.isdir(_FRONTEND_DIST):
     async def ui_redirect():
         from fastapi.responses import RedirectResponse
         return RedirectResponse(url="/app")
+

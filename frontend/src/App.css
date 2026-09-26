@@ -229,3 +229,59 @@ body {
   z-index: 1000;
   white-space: nowrap;
 }
+
+/* ── Mode switcher tabs ─────────────────────────────── */
+.mode-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.mode-tab {
+  flex: 1;
+  padding: 8px 6px;
+  border: 1.5px solid #d1d9e0;
+  border-radius: 7px;
+  background: #f7fafc;
+  font-size: .78rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: #4a5568;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.mode-tab:hover  { background: #e8f0fe; border-color: #2b6cb0; color: #2b6cb0; }
+.mode-tab.active { background: #2b6cb0; color: #fff; border-color: #2b6cb0; }
+
+/* ── Draw mode UI ───────────────────────────────────── */
+.draw-hint {
+  background: #fffbea;
+  border: 1px dashed #d69e2e;
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-size: .78rem;
+  color: #744210;
+  line-height: 1.5;
+}
+
+.draw-bounds-info {
+  background: #e6fffa;
+  border: 1px solid #81e6d9;
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-size: .78rem;
+  color: #234e52;
+  line-height: 1.6;
+}
+.draw-bounds-info small { display: block; margin-top: 4px; opacity: .8; }
+
+/* ── Input source badge ─────────────────────────────── */
+.input-source-badge {
+  display: inline-block;
+  background: #ebf8ff;
+  border: 1px solid #bee3f8;
+  border-radius: 20px;
+  padding: 3px 10px;
+  font-size: .73rem;
+  color: #2c5282;
+  margin-bottom: 8px;
+  font-weight: 500;
+}

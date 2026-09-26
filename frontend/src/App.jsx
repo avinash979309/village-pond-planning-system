@@ -14,6 +14,10 @@ L.Icon.Default.mergeOptions({ iconUrl, iconRetinaUrl, shadowUrl })
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
+// ── Input modes ────────────────────────────────────────────────────────────────
+const MODE_KML  = 'kml'
+const MODE_DRAW = 'draw'
+
 function fmt(v, decimals = 2) {
   if (v == null || v === '') return '—'
   return typeof v === 'number' ? v.toFixed(decimals) : v
@@ -49,24 +53,29 @@ function CandidatePanel({ c, rank }) {
 }
 
 export default function App() {
-  const [file, setFile] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
-  const [result, setResult] = useState(null)
-  const [activeTab, setActiveTab] = useState(0)
-  const [drawEnabled, setDrawEnabled] = useState(false)
+  const [mode, setMode]               = useState(MODE_KML)
+  const [file, setFile]               = useState(null)
+  const [loading, setLoading]         = useState(false)
+  const [error, setError]             = useState(null)
+  const [result, setResult]           = useState(null)
+  const [activeTab, setActiveTab]     = useState(0)
   const [selectedBounds, setSelectedBounds] = useState(null)
+  const [drawEnabled, setDrawEnabled] = useState(false)
   const fileInputRef = useRef()
 
-  const runAnalysis = useCallback(async (formData) => {
+  // ── shared analysis runner ──────────────────────────────────────────────────
+  const runAnalysis = useCallback(async (url, body, isJson = false) => {
     setLoading(true)
     setError(null)
     setResult(null)
     try {
-      const res = await fetch(`${API_BASE}/analyzeContour`, { method: 'POST', body: formData })
+      const opts = isJson
+        ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+        : { method: 'POST', body }
+      const res = await fetch(`${API_BASE}${url}`, opts)
       if (!res.ok) {
         const txt = await res.text()
-        throw new Error(`Server ${res.status}: ${txt.slice(0, 200)}`)
+        throw new Error(`Server ${res.status}: ${txt.slice(0, 300)}`)
       }
       const data = await res.json()
       setResult(data)
@@ -78,25 +87,43 @@ export default function App() {
     }
   }, [])
 
+  // ── KML file submit ─────────────────────────────────────────────────────────
   const handleFileSubmit = () => {
     if (!file) return
     const fd = new FormData()
     fd.append('file', file)
-    runAnalysis(fd)
+    runAnalysis('/analyzeContour', fd)
   }
 
-  const handleBoundsSubmit = () => {
-    if (!selectedBounds) return
-    // Convert bounds to bbox and call /analyzeArea (not yet implemented)
-    // For now, show a clear message — real DEM fetching needs OpenTopography key
-    setError(
-      'Area-based analysis (DEM fetch from OpenTopography) is coming. ' +
-      'Upload a KML contour map instead using the option above.'
-    )
+  // ── Drawn area submit ───────────────────────────────────────────────────────
+  const handleAreaSubmit = () => {
+    if (!selectedBounds) {
+      setError('Draw a rectangle on the map first, then click Analyze Area.')
+      return
+    }
+    const sw = selectedBounds.getSouthWest()
+    const ne = selectedBounds.getNorthEast()
+    runAnalysis('/analyzeArea', {
+      west:  sw.lng,
+      south: sw.lat,
+      east:  ne.lng,
+      north: ne.lat,
+    }, true)
   }
 
-  const vol = result?.water_volume
-  const best = result?.all_candidates?.[0]
+  // ── Mode switch ─────────────────────────────────────────────────────────────
+  const switchMode = (m) => {
+    setMode(m)
+    setError(null)
+    setResult(null)
+    setFile(null)
+    setSelectedBounds(null)
+    // Enable draw tool when entering draw mode
+    setDrawEnabled(m === MODE_DRAW)
+  }
+
+  const vol  = result?.water_volume
+  const inputBoundary = result?.input_boundary  // bbox polygon GeoJSON
 
   return (
     <div id="root">
@@ -108,73 +135,154 @@ export default function App() {
         </svg>
         <div>
           <h1>AI-based Village Pond Planning System</h1>
-          <p>Upload a KML contour map to identify optimal pond locations with catchment analysis</p>
+          <p>Identify optimal pond locations — upload a contour map or select an area on the map</p>
         </div>
       </div>
 
       <div className="layout">
         {/* ── Sidebar ── */}
         <aside className="sidebar">
-          {/* Instructions */}
-          <div className="sidebar-section">
-            <h2>How to Use</h2>
-            <div className="instructions">
-              <ol>
-                <li>Upload a KML/KMZ contour map file</li>
-                <li>Click <b>Analyze</b> — takes ~60–90 s</li>
-                <li>View results on the map and in the panel</li>
-                <li>Click map markers for details</li>
-              </ol>
+
+          {/* ── Mode switcher tabs ── */}
+          <div className="sidebar-section" style={{ paddingBottom: 0 }}>
+            <div className="mode-tabs">
+              <button
+                className={`mode-tab ${mode === MODE_KML ? 'active' : ''}`}
+                onClick={() => switchMode(MODE_KML)}
+              >
+                📄 Upload KML
+              </button>
+              <button
+                className={`mode-tab ${mode === MODE_DRAW ? 'active' : ''}`}
+                onClick={() => switchMode(MODE_DRAW)}
+              >
+                🗺️ Draw Area
+              </button>
             </div>
           </div>
 
-          {/* Upload */}
-          <div className="sidebar-section">
-            <h2>Upload Contour Map</h2>
-            <label className={`upload-label ${file ? 'has-file' : ''}`}>
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                <polyline points="17 8 12 3 7 8"/>
-                <line x1="12" y1="3" x2="12" y2="15"/>
-              </svg>
-              {file ? `✓ ${file.name}` : 'Click to select .kml or .kmz'}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".kml,.kmz"
-                onChange={e => { setFile(e.target.files[0] || null); setError(null) }}
-              />
-            </label>
-
-            <button
-              className="btn btn-primary"
-              style={{ marginTop: 10 }}
-              disabled={!file || loading}
-              onClick={handleFileSubmit}
-            >
-              {loading ? 'Analyzing…' : 'Analyze'}
-            </button>
-
-            {file && (
-              <button className="btn btn-clear" onClick={() => { setFile(null); setResult(null); setError(null) }}>
-                Clear
-              </button>
-            )}
-
-            {loading && (
-              <div className="spinner-wrap" style={{ marginTop: 10 }}>
-                <div className="spinner" />
-                <span>Running terrain + hydrology analysis…</span>
+          {/* ── KML Upload mode ── */}
+          {mode === MODE_KML && (
+            <div className="sidebar-section">
+              <h2>Upload Contour Map</h2>
+              <div className="instructions" style={{ marginBottom: 10 }}>
+                <ol>
+                  <li>Upload a KML/KMZ contour map file</li>
+                  <li>Click <b>Analyze</b> — takes ~60–90 s</li>
+                  <li>View results on the map and panel</li>
+                  <li>Click map markers for details</li>
+                </ol>
               </div>
-            )}
 
-            {error && <div className="error-box" style={{ marginTop: 10 }}>{error}</div>}
-          </div>
+              <label className={`upload-label ${file ? 'has-file' : ''}`}>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                {file ? `✓ ${file.name}` : 'Click to select .kml or .kmz'}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".kml,.kmz"
+                  onChange={e => { setFile(e.target.files[0] || null); setError(null) }}
+                />
+              </label>
 
-          {/* Results */}
+              <button
+                className="btn btn-primary"
+                style={{ marginTop: 10 }}
+                disabled={!file || loading}
+                onClick={handleFileSubmit}
+              >
+                {loading ? 'Analyzing…' : 'Analyze'}
+              </button>
+
+              {file && (
+                <button className="btn btn-clear" onClick={() => { setFile(null); setResult(null); setError(null) }}>
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* ── Draw Area mode ── */}
+          {mode === MODE_DRAW && (
+            <div className="sidebar-section">
+              <h2>Select Area on Map</h2>
+              <div className="instructions" style={{ marginBottom: 10 }}>
+                <ol>
+                  <li>Use the <b>rectangle tool</b> (▭) that appeared on the map</li>
+                  <li>Draw a rectangle over your area of interest</li>
+                  <li>Click <b>Analyze Area</b> — fetches elevation data and runs analysis</li>
+                  <li>View results on the map and panel</li>
+                </ol>
+              </div>
+
+              {selectedBounds ? (
+                <div className="draw-bounds-info">
+                  ✅ Area selected<br/>
+                  <small>
+                    SW: {selectedBounds.getSouthWest().lat.toFixed(4)}°N, {selectedBounds.getSouthWest().lng.toFixed(4)}°E<br/>
+                    NE: {selectedBounds.getNorthEast().lat.toFixed(4)}°N, {selectedBounds.getNorthEast().lng.toFixed(4)}°E
+                  </small>
+                </div>
+              ) : (
+                <div className="draw-hint">
+                  👆 Draw a rectangle on the map using the toolbar (▭ icon) on the left side of the map
+                </div>
+              )}
+
+              <button
+                className="btn btn-primary"
+                style={{ marginTop: 10 }}
+                disabled={!selectedBounds || loading}
+                onClick={handleAreaSubmit}
+              >
+                {loading ? 'Fetching elevation & analyzing…' : 'Analyze Area'}
+              </button>
+
+              {selectedBounds && (
+                <button
+                  className="btn btn-clear"
+                  onClick={() => { setSelectedBounds(null); setResult(null); setError(null) }}
+                >
+                  Clear Selection
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* ── Loading spinner ── */}
+          {loading && (
+            <div className="sidebar-section">
+              <div className="spinner-wrap">
+                <div className="spinner" />
+                <span>
+                  {mode === MODE_DRAW
+                    ? 'Fetching elevation data + running terrain analysis…'
+                    : 'Running terrain + hydrology analysis…'}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* ── Error ── */}
+          {error && <div className="sidebar-section"><div className="error-box">{error}</div></div>}
+
+          {/* ── Results ── */}
           {result && (
             <div className="sidebar-section" style={{ flex: 1 }}>
               <h2>Results</h2>
+
+              {/* Input area info badge */}
+              {result.input_source && (
+                <div className="input-source-badge">
+                  {result.input_source === 'kml'
+                    ? '📄 Source: KML contour map'
+                    : '🗺️ Source: Selected map area (SRTM DEM)'}
+                </div>
+              )}
 
               {/* Water volume summary */}
               {vol && (
@@ -226,7 +334,12 @@ export default function App() {
         {/* ── Map ── */}
         <div className="map-wrap">
           {loading && <div className="map-hint">⏳ Analyzing terrain — please wait…</div>}
-          {!loading && !result && <div className="map-hint">Upload a KML file and click Analyze</div>}
+          {!loading && !result && mode === MODE_KML && (
+            <div className="map-hint">Upload a KML file and click Analyze</div>
+          )}
+          {!loading && !result && mode === MODE_DRAW && (
+            <div className="map-hint">Draw a rectangle on the map, then click Analyze Area</div>
+          )}
 
           <MapContainer
             center={[21.25, 81.3]}
@@ -237,8 +350,16 @@ export default function App() {
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
-            <DrawControl onBoundsSelected={setSelectedBounds} enabled={drawEnabled} />
-            {result && <ResultsOverlay data={result} />}
+            <DrawControl
+              onBoundsSelected={setSelectedBounds}
+              enabled={drawEnabled}
+            />
+            {result && (
+              <ResultsOverlay
+                data={result}
+                inputBoundary={inputBoundary}
+              />
+            )}
           </MapContainer>
         </div>
       </div>
