@@ -65,14 +65,12 @@ if not hasattr(np, "in1d"):
     np.in1d = _in1d_compat
 # ─────────────────────────────────────────────────────────────────────────────
 
-
 from app.geo.utils import BBox
 
-try:
-    from pysheds.grid import Grid as PyshedsGrid
-    _PYSHEDS_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    _PYSHEDS_AVAILABLE = False
+# pysheds imported lazily inside run_hydrology() to avoid triggering
+# numba JIT at import time (200-400MB RAM spike → OOM on lab server).
+_PYSHEDS_AVAILABLE = None   # None = unchecked, True/False = checked
+
 
 
 
@@ -146,6 +144,14 @@ def run_hydrology(
     -------
     HydrologyResult
     """
+    # Lazy import — avoids numba JIT spike (200-400MB) at server startup
+    global _PYSHEDS_AVAILABLE
+    try:
+        from pysheds.grid import Grid as PyshedsGrid
+        _PYSHEDS_AVAILABLE = True
+    except ImportError:
+        _PYSHEDS_AVAILABLE = False
+
     if not _PYSHEDS_AVAILABLE:
         raise RuntimeError(  # pragma: no cover
             "pysheds is not installed. Install it with: pip install pysheds"
@@ -159,6 +165,7 @@ def run_hydrology(
     # ── Step 2: Load into pysheds ─────────────────────────────────────────────
     grid = PyshedsGrid.from_raster(tmp_path)
     dem = grid.read_raster(tmp_path)
+
 
     # ── Step 3: Condition DEM ─────────────────────────────────────────────────
     pit_filled = grid.fill_pits(dem)
