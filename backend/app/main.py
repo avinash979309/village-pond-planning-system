@@ -129,18 +129,22 @@ async def analyze_contour_simple(file: UploadFile):
                 _analyze_contour(
                     file_bytes=file_bytes,
                     filename=filename,
-                    grid_resolution=100,       # 100×100 grid (lab-machine-friendly)
+                    grid_resolution=60,        # 60×60 — 2.8× faster than 100×100, stable on lab machine
                     drainage_threshold_pct=2.0,
                     drainage_buffer_cells=2,
                     snap_radius_cells=5,
-                    skip_osm=False,
+                    skip_osm=True,             # skip OSM fetch — saves 5-15s, non-critical for results
                 )
             )
         finally:
             loop.close()
             asyncio.set_event_loop(None)
 
-    result = await asyncio.to_thread(_run_in_thread)
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_run_in_thread), timeout=90.0)
+    except asyncio.TimeoutError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=504, detail="Analysis timed out (>90s). Try a smaller or simpler KML file.")
 
     # All candidates (service already delineated catchment for each one)
     candidates = result.get("top_candidates", [])
@@ -273,7 +277,11 @@ async def analyze_area_endpoint(req: AreaRequest):
             loop.close()
             asyncio.set_event_loop(None)
 
-    result = await asyncio.to_thread(_run_in_thread)
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_run_in_thread), timeout=90.0)
+    except asyncio.TimeoutError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=504, detail="Analysis timed out (>90s). Draw a smaller rectangle and try again.")
 
     # ── Cache set (errors logged not raised) ───────────────────────────────────
     redis_cache.set(req.west, req.south, req.east, req.north, result)
