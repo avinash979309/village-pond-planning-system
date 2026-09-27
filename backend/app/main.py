@@ -56,9 +56,11 @@ app.include_router(api_router, prefix="/api/v1")
 
 # ── Health ────────────────────────────────────────────────────────────────────
 @app.get("/api/v1/health", tags=["Health"])
+@app.get("/health", tags=["Health"])
 async def health():
     """Basic liveness check."""
-    return {"status": "ok", "version": "0.1.0"}
+    import os, socket
+    return {"status": "ok", "version": "0.1.0", "host": socket.gethostname(), "machine": os.environ.get("MACHINE_ID", "primary")}
 
 
 # ── Root route ────────────────────────────────────────────────────────────────
