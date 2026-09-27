@@ -33,7 +33,7 @@ for LAT in $LATS; do
     GZ="${HGT}.gz"
 
     echo -n "  GET   $TILE ... "
-    if curl -sf --max-time 60 -o "$GZ" "$URL" 2>/dev/null; then
+    if curl --interface wlp1s0 -sf --max-time 90 -o "$GZ" "$URL" 2>/dev/null; then
       gunzip -f "$GZ"
       SIZE=$(du -h "$HGT" | cut -f1)
       echo "OK ($SIZE)"

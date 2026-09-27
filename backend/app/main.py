@@ -28,6 +28,7 @@ from app.config import settings
 from app.api.v1.router import api_router
 from app.services.contour_analysis_service import analyze_contour as _analyze_contour
 from app.services.area_analysis_service import analyze_area as _analyze_area
+from app import redis_cache
 
 app = FastAPI(
     title="Village Pond Planning System API",
@@ -248,7 +249,14 @@ async def analyze_area_endpoint(req: AreaRequest):
 
     Body JSON: {"west": float, "south": float, "east": float, "north": float}
     Returns pond location, pour point, and catchment area as structured JSON.
+    Cache: Redis (24h TTL by bbox key). Falls back to compute if Redis unavailable.
     """
+    # ── Cache check ────────────────────────────────────────────────────────────
+    cached = redis_cache.get(req.west, req.south, req.east, req.north)
+    if cached is not None:
+        cached["_cache"] = "hit"
+        return cached
+
     def _run_in_thread():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -266,6 +274,10 @@ async def analyze_area_endpoint(req: AreaRequest):
             asyncio.set_event_loop(None)
 
     result = await asyncio.to_thread(_run_in_thread)
+
+    # ── Cache set (errors logged not raised) ───────────────────────────────────
+    redis_cache.set(req.west, req.south, req.east, req.north, result)
+    result["_cache"] = "miss"
     return result
 
 
