@@ -88,21 +88,28 @@ function CandidatePanel({ c, rank }) {
   if (!c) return null
   const color = RANK_COLORS[Math.min(rank, 2)]
   const label = RANK_LABELS[Math.min(rank, 2)]
+  // API uses suitability_score / slope_degrees / area_km2 (area service)
+  // KML service also includes flow_accumulation and slope_degrees
+  const score    = c.suitability_score ?? c.score
+  const slope    = c.slope_degrees     ?? c.slope_deg
+  const flowAcc  = c.flow_accumulation
+  const areaKm2  = c.catchment?.area_km2 ?? c.catchment?.area_sq_km
   return (
     <div className="candidate-panel" style={{ borderTopColor: color }}>
       <div className="rank-badge" style={{ background: color }}>{label}</div>
       <div className="stat-grid">
-        <StatCard label="Score"           value={fmt(c.score, 3)}             cls="blue" />
-        <StatCard label="Elevation"       value={`${fmt(c.elevation_m, 1)} m`} />
-        <StatCard label="Flow accum."     value={fmt(c.flow_accumulation, 0)} cls="teal" />
-        <StatCard label="Slope"           value={`${fmt(c.slope_deg, 2)}°`} />
-        <StatCard label="Catchment area"  value={`${fmt(c.catchment?.area_sq_km, 2)} km²`} cls="blue" />
-        <StatCard label="Avg elevation"   value={`${fmt(c.catchment?.avg_elevation_m, 1)} m`} />
-        <StatCard label="Area (m²)"       value={`${fmt(c.catchment?.area_m2, 0)} m²`} />
+        <StatCard label="Score"          value={fmt(score, 3)}               cls="blue" />
+        <StatCard label="Elevation"      value={`${fmt(c.elevation_m, 1)} m`} />
+        {flowAcc != null && <StatCard label="Flow accum."  value={fmt(flowAcc, 0)}  cls="teal" />}
+        {slope   != null && <StatCard label="Slope"        value={`${fmt(slope, 2)}°`} />}
+        <StatCard label="Catchment area" value={`${fmt(areaKm2, 2)} km²`}     cls="blue" />
+        <StatCard label="Avg elevation"  value={`${fmt(c.catchment?.avg_elevation_m, 1)} m`} />
+        <StatCard label="Area (m²)"      value={`${fmt(c.catchment?.area_m2, 0)} m²`} cls="full" />
       </div>
     </div>
   )
 }
+
 
 function ProgressBar({ pct, stage }) {
   return (
