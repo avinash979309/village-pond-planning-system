@@ -317,6 +317,8 @@ async def _run_area_pipeline(
             "latitude":          cand.lat,
             "elevation_m":       cand.elevation_m,
             "suitability_score": cand.suitability_score,
+            "slope_degrees":     cand.slope_degrees,
+            "flow_accumulation": cand.flow_accumulation,
             "pour_point": {
                 "longitude": pp.lon,
                 "latitude":  pp.lat,
