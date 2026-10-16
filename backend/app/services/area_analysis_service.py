@@ -32,10 +32,10 @@ from app.geo.water_volume import estimate_water_volume
 # Directory containing .hgt files
 _SRTM_DIR = Path(__file__).parent.parent / "data" / "srtm"
 
-# Grid resolution — 50x50 keeps memory well under 512MB cgroup limit
-# (80x80 was triggering OOM kills on the lab server)
-_GRID_ROWS = 50
-_GRID_COLS = 50
+# Grid resolution — 30x30 keeps memory strictly under 512MB cgroup limit
+# (50x50 was triggering OOM kills on the lab server when doing bbox analysis)
+_GRID_ROWS = 30
+_GRID_COLS = 30
 
 # Max bbox size in degrees (~100 km per side)
 _MAX_BBOX_DEG = 1.0
