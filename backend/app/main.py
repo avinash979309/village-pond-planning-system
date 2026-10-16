@@ -89,64 +89,74 @@ async def root():
     }
 
 
-# ── Zipkin / Telemetry proxy (middleware — catches ALL HTTP methods) ───────────
-# Zipkin's UI hardcodes <base href="/zipkin/"> so the proxy must be at /zipkin/
-# Access: http://10.1.75.53:7208/zipkin/   (or /telemetry → redirects there)
-# Middleware runs before routing so HEAD/OPTIONS/etc all work correctly.
+# ── Telemetry Dashboard ───────────────────────────────────────────────────────
+# Server-rendered HTML page — reads Zipkin API and shows traces as a table.
+# Access: http://10.1.75.53:7208/telemetry  (no SSH tunnel, works with nohup)
 import httpx as _httpx
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request as _Request
-from starlette.responses import Response as _Response, RedirectResponse as _RedirectResponse
 
-_ZIPKIN_BASE = "http://localhost:7001"
+_ZIPKIN_API = "http://localhost:7001"
 
-
-class ZipkinProxyMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: _Request, call_next):
-        path = request.url.path
-
-        # /telemetry or /telemetry/ → redirect to /zipkin/
-        if path in ("/telemetry", "/telemetry/"):
-            return _RedirectResponse(url="/zipkin/")
-
-        # /zipkin/* → proxy to Zipkin
-        if path.startswith("/zipkin"):
-            target = f"{_ZIPKIN_BASE}{path}"
-            skip = {"host", "content-length", "transfer-encoding"}
-            fwd_headers = {
-                k: v for k, v in request.headers.items()
-                if k.lower() not in skip
-            }
-            async with _httpx.AsyncClient(timeout=30) as client:
-                try:
-                    resp = await client.request(
-                        method=request.method,
-                        url=target,
-                        headers=fwd_headers,
-                        content=await request.body(),
-                        params=dict(request.query_params),
-                        follow_redirects=True,
-                    )
-                    resp_headers = {
-                        k: v for k, v in resp.headers.items()
-                        if k.lower() not in {"transfer-encoding", "connection"}
-                    }
-                    return _Response(
-                        content=resp.content,
-                        status_code=resp.status_code,
-                        headers=resp_headers,
-                    )
-                except _httpx.ConnectError:
-                    return _Response(
-                        content=b"Zipkin not running. SSH to sys4: bash /tmp/start_zipkin.sh",
-                        status_code=503,
-                        media_type="text/plain",
-                    )
-
-        return await call_next(request)
+_DASH_HTML = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>OTel Telemetry — Village Pond API</title>
+<meta http-equiv="refresh" content="15">
+<style>
+body{{font-family:monospace;background:#111;color:#eee;padding:20px;}}
+h1{{color:#4CAF50;}}h2{{color:#2196F3;border-bottom:1px solid #333;padding-bottom:5px;}}
+table{{border-collapse:collapse;width:100%;margin-bottom:20px;}}
+th{{background:#1e1e1e;color:#4CAF50;padding:8px 12px;text-align:left;}}
+td{{padding:6px 12px;border-bottom:1px solid #222;}}
+.ok{{color:#4CAF50;}}.warn{{color:#ff9800;}}.err{{color:#f44336;}}
+.badge{{background:#333;border-radius:4px;padding:2px 8px;font-size:12px;}}
+pre{{background:#1e1e1e;padding:10px;border-radius:4px;font-size:12px;}}
+</style></head><body>
+<h1>&#128301; OpenTelemetry Dashboard — Village Pond API</h1>
+<p>Service: <b>village-pond-api</b> &nbsp;|&nbsp; Zipkin: <span class="{zsc}">{zs}</span>
+   &nbsp;|&nbsp; <small>auto-refresh every 15s</small></p>
+<h2>Services Registered</h2><pre>{svcs}</pre>
+<h2>Recent Traces (last 20)</h2>
+<table><tr><th>Operation</th><th>Duration</th><th>Spans</th><th>Time (UTC)</th><th>Trace ID</th></tr>
+{rows}
+</table>
+<p><a href="/docs" style="color:#2196F3">API Docs</a> &nbsp;|&nbsp;
+   <a href="/health" style="color:#2196F3">Health</a></p>
+</body></html>"""
 
 
-app.add_middleware(ZipkinProxyMiddleware)
+@app.get("/telemetry", tags=["Telemetry"])
+@app.get("/telemetry/", include_in_schema=False)
+async def telemetry_dashboard():
+    """Live OTel dashboard — fetches recent traces from Zipkin and renders HTML."""
+    from fastapi.responses import HTMLResponse
+    import datetime
+
+    svcs, rows_html, zs, zsc = "(Zipkin unreachable)", "", "DOWN", "err"
+    try:
+        async with _httpx.AsyncClient(timeout=5) as c:
+            r = await c.get(f"{_ZIPKIN_API}/api/v2/services")
+            services = r.json() if r.status_code == 200 else []
+            svcs = "  ".join(services) or "(none yet)"
+            zs, zsc = "UP", "ok"
+
+            r2 = await c.get(f"{_ZIPKIN_API}/api/v2/traces",
+                             params={"serviceName": "village-pond-api", "limit": 20})
+            traces = r2.json() if r2.status_code == 200 else []
+            rows = []
+            for t in traces:
+                root = next((s for s in t if not s.get("parentId")), t[0])
+                name = root.get("name", "?")
+                dur = root.get("duration", 0) // 1000
+                tid = root.get("traceId", "?")[:16] + "…"
+                ts = root.get("timestamp", 0) // 1_000_000
+                dt = datetime.datetime.utcfromtimestamp(ts).strftime("%H:%M:%S") if ts else "?"
+                cls = "err" if dur > 10000 else ("warn" if dur > 3000 else "ok")
+                rows.append(f"<tr><td>{name}</td><td class='{cls}'>{dur}ms</td>"
+                            f"<td><span class='badge'>{len(t)}</span></td>"
+                            f"<td>{dt}</td><td>{tid}</td></tr>")
+            rows_html = "\n".join(rows) or "<tr><td colspan='5'>No traces yet — send a request first</td></tr>"
+    except Exception as ex:
+        svcs = f"Error: {ex}"
+
+    return HTMLResponse(_DASH_HTML.format(svcs=svcs, rows=rows_html, zs=zs, zsc=zsc))
 
 
 # ── Simple top-level route ────────────────────────────────────────────────────
