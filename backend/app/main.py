@@ -89,60 +89,64 @@ async def root():
     }
 
 
-# ── Zipkin / Telemetry proxy ─────────────────────────────────────────────────
-# Zipkin's UI hardcodes <base href="/zipkin/"> so the proxy MUST be at /zipkin/
-# Access at: http://10.1.75.53:7208/zipkin/
-# /telemetry  → redirects to /zipkin/ (alias)
-# Works with nohup — no terminal needed.
+# ── Zipkin / Telemetry proxy (middleware — catches ALL HTTP methods) ───────────
+# Zipkin's UI hardcodes <base href="/zipkin/"> so the proxy must be at /zipkin/
+# Access: http://10.1.75.53:7208/zipkin/   (or /telemetry → redirects there)
+# Middleware runs before routing so HEAD/OPTIONS/etc all work correctly.
 import httpx as _httpx
-from fastapi import Request as _Request
-from fastapi.responses import Response as _Response
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as _Request
+from starlette.responses import Response as _Response, RedirectResponse as _RedirectResponse
 
 _ZIPKIN_BASE = "http://localhost:7001"
 
 
-@app.get("/telemetry", include_in_schema=False)
-@app.get("/telemetry/", include_in_schema=False)
-async def telemetry_redirect():
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/zipkin/")
+class ZipkinProxyMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: _Request, call_next):
+        path = request.url.path
 
+        # /telemetry or /telemetry/ → redirect to /zipkin/
+        if path in ("/telemetry", "/telemetry/"):
+            return _RedirectResponse(url="/zipkin/")
 
-@app.api_route(
-    "/zipkin/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"],
-    include_in_schema=False,
-)
-async def zipkin_proxy(path: str, request: _Request):
-    """Reverse-proxy /zipkin/* → Zipkin UI on localhost:7001.
-    Zipkin's base href is /zipkin/ so this path matches exactly."""
-    url = f"{_ZIPKIN_BASE}/zipkin/{path}"
-    skip = {"host", "content-length", "transfer-encoding"}
-    fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
-    async with _httpx.AsyncClient(timeout=30) as client:
-        try:
-            resp = await client.request(
-                method=request.method,
-                url=url,
-                headers=fwd_headers,
-                content=await request.body(),
-                params=dict(request.query_params),
-                follow_redirects=True,
-            )
-            resp_headers = {
-                k: v for k, v in resp.headers.items()
-                if k.lower() not in {"transfer-encoding", "connection"}
+        # /zipkin/* → proxy to Zipkin
+        if path.startswith("/zipkin"):
+            target = f"{_ZIPKIN_BASE}{path}"
+            skip = {"host", "content-length", "transfer-encoding"}
+            fwd_headers = {
+                k: v for k, v in request.headers.items()
+                if k.lower() not in skip
             }
-            return _Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                headers=resp_headers,
-            )
-        except _httpx.ConnectError:
-            return _Response(
-                content=b"Zipkin not running. SSH to sys4 and run: bash /tmp/start_zipkin.sh",
-                status_code=503,
-            )
+            async with _httpx.AsyncClient(timeout=30) as client:
+                try:
+                    resp = await client.request(
+                        method=request.method,
+                        url=target,
+                        headers=fwd_headers,
+                        content=await request.body(),
+                        params=dict(request.query_params),
+                        follow_redirects=True,
+                    )
+                    resp_headers = {
+                        k: v for k, v in resp.headers.items()
+                        if k.lower() not in {"transfer-encoding", "connection"}
+                    }
+                    return _Response(
+                        content=resp.content,
+                        status_code=resp.status_code,
+                        headers=resp_headers,
+                    )
+                except _httpx.ConnectError:
+                    return _Response(
+                        content=b"Zipkin not running. SSH to sys4: bash /tmp/start_zipkin.sh",
+                        status_code=503,
+                        media_type="text/plain",
+                    )
+
+        return await call_next(request)
+
+
+app.add_middleware(ZipkinProxyMiddleware)
 
 
 # ── Simple top-level route ────────────────────────────────────────────────────
