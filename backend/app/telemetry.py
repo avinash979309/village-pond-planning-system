@@ -2,12 +2,11 @@
 OpenTelemetry setup for Village Pond Planning System.
 
 Exports:
-  - Traces  → ConsoleSpanExporter (stdout JSON) — no backend required
-  - Metrics → ConsoleMetricExporter (stdout) — printed every 15 s
+  - Traces  → Zipkin (localhost:9411) + ConsoleSpanExporter (stdout)
+  - Metrics → ConsoleMetricExporter (stdout, every 15 s)
   - Logs    → ConsoleLogExporter (stdout) + Python logging bridge
 
-If OTEL_EXPORTER_OTLP_ENDPOINT is set, ALSO exports via OTLP gRPC to that
-endpoint (e.g. Jaeger). Console export is always active regardless.
+Zipkin UI: http://localhost:9411  (external: http://10.1.75.53:9619)
 
 Call setup_telemetry() once at app startup (main.py).
 """
@@ -17,6 +16,7 @@ import os
 
 from opentelemetry import metrics, trace
 from opentelemetry._logs import set_logger_provider
+from opentelemetry.exporter.zipkin.json import ZipkinExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.logging import LoggingInstrumentor
@@ -30,7 +30,9 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExport
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SERVICE_NAME = "village-pond-api"
-OTEL_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")  # optional
+ZIPKIN_ENDPOINT = os.getenv(
+    "ZIPKIN_ENDPOINT", "http://localhost:9411/api/v2/spans"
+)
 
 _resource = Resource.create({"service.name": SERVICE_NAME})
 
@@ -38,7 +40,7 @@ _resource = Resource.create({"service.name": SERVICE_NAME})
 tracer: trace.Tracer = None
 meter:  metrics.Meter = None
 
-# Metrics instruments (created after meter is ready)
+# Metrics instruments
 analysis_counter        = None
 analysis_duration       = None
 cache_hit_counter       = None
@@ -54,37 +56,24 @@ def setup_telemetry(app) -> None:
 
     # ── Traces ────────────────────────────────────────────────────────────────
     tp = TracerProvider(resource=_resource)
-    # Always: console (stdout)
+    # Zipkin — visual UI backend
+    tp.add_span_processor(
+        BatchSpanProcessor(ZipkinExporter(endpoint=ZIPKIN_ENDPOINT))
+    )
+    # Console — also print to stdout for terminal screenshots
     tp.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
-    # Optional: OTLP if endpoint set
-    if OTEL_ENDPOINT:
-        try:
-            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-            tp.add_span_processor(
-                BatchSpanProcessor(OTLPSpanExporter(endpoint=OTEL_ENDPOINT, insecure=True))
-            )
-        except Exception as e:
-            logging.getLogger(__name__).warning("OTLP trace exporter failed: %s", e)
     trace.set_tracer_provider(tp)
     tracer = trace.get_tracer(SERVICE_NAME)
 
     # ── Metrics ───────────────────────────────────────────────────────────────
-    readers = [
-        PeriodicExportingMetricReader(ConsoleMetricExporter(), export_interval_millis=15_000)
-    ]
-    if OTEL_ENDPOINT:
-        try:
-            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-            readers.append(
-                PeriodicExportingMetricReader(
-                    OTLPMetricExporter(endpoint=OTEL_ENDPOINT, insecure=True),
-                    export_interval_millis=15_000,
-                )
+    mp = MeterProvider(
+        resource=_resource,
+        metric_readers=[
+            PeriodicExportingMetricReader(
+                ConsoleMetricExporter(), export_interval_millis=15_000
             )
-        except Exception as e:
-            logging.getLogger(__name__).warning("OTLP metric exporter failed: %s", e)
-
-    mp = MeterProvider(resource=_resource, metric_readers=readers)
+        ],
+    )
     metrics.set_meter_provider(mp)
     meter = metrics.get_meter(SERVICE_NAME)
 
@@ -117,14 +106,6 @@ def setup_telemetry(app) -> None:
     # ── Logs ──────────────────────────────────────────────────────────────────
     lp = LoggerProvider(resource=_resource)
     lp.add_log_record_processor(BatchLogRecordProcessor(ConsoleLogExporter()))
-    if OTEL_ENDPOINT:
-        try:
-            from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-            lp.add_log_record_processor(
-                BatchLogRecordProcessor(OTLPLogExporter(endpoint=OTEL_ENDPOINT, insecure=True))
-            )
-        except Exception as e:
-            logging.getLogger(__name__).warning("OTLP log exporter failed: %s", e)
     set_logger_provider(lp)
     LoggingInstrumentor().instrument(set_logging_format=True)
 
@@ -133,6 +114,6 @@ def setup_telemetry(app) -> None:
     HTTPXClientInstrumentor().instrument()
 
     logging.getLogger(__name__).info(
-        "OpenTelemetry configured: service=%s otlp_endpoint=%s",
-        SERVICE_NAME, OTEL_ENDPOINT or "(none — console only)",
+        "OpenTelemetry configured: service=%s zipkin=%s",
+        SERVICE_NAME, ZIPKIN_ENDPOINT,
     )
