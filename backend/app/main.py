@@ -90,9 +90,10 @@ async def root():
 
 
 # ── Zipkin / Telemetry proxy ─────────────────────────────────────────────────
-# Proxies Zipkin UI through the app so it's accessible at:
-#   http://10.1.75.53:7208/telemetry/
-# Works even when terminals are closed (app runs with nohup).
+# Zipkin's UI hardcodes <base href="/zipkin/"> so the proxy MUST be at /zipkin/
+# Access at: http://10.1.75.53:7208/zipkin/
+# /telemetry  → redirects to /zipkin/ (alias)
+# Works with nohup — no terminal needed.
 import httpx as _httpx
 from fastapi import Request as _Request
 from fastapi.responses import Response as _Response
@@ -101,19 +102,21 @@ _ZIPKIN_BASE = "http://localhost:7001"
 
 
 @app.get("/telemetry", include_in_schema=False)
+@app.get("/telemetry/", include_in_schema=False)
 async def telemetry_redirect():
     from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/telemetry/")
+    return RedirectResponse(url="/zipkin/")
 
 
 @app.api_route(
-    "/telemetry/{path:path}",
+    "/zipkin/{path:path}",
     methods=["GET", "POST", "PUT", "DELETE"],
     include_in_schema=False,
 )
 async def zipkin_proxy(path: str, request: _Request):
-    """Reverse-proxy every /telemetry/* request to Zipkin UI on localhost:7001."""
-    url = f"{_ZIPKIN_BASE}/{path}"
+    """Reverse-proxy /zipkin/* → Zipkin UI on localhost:7001.
+    Zipkin's base href is /zipkin/ so this path matches exactly."""
+    url = f"{_ZIPKIN_BASE}/zipkin/{path}"
     skip = {"host", "content-length", "transfer-encoding"}
     fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
     async with _httpx.AsyncClient(timeout=30) as client:
@@ -137,7 +140,7 @@ async def zipkin_proxy(path: str, request: _Request):
             )
         except _httpx.ConnectError:
             return _Response(
-                content=b"Zipkin not running. Restart: bash /tmp/start_zipkin.sh",
+                content=b"Zipkin not running. SSH to sys4 and run: bash /tmp/start_zipkin.sh",
                 status_code=503,
             )
 
