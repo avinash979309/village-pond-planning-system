@@ -89,6 +89,59 @@ async def root():
     }
 
 
+# ── Zipkin / Telemetry proxy ─────────────────────────────────────────────────
+# Proxies Zipkin UI through the app so it's accessible at:
+#   http://10.1.75.53:7208/telemetry/
+# Works even when terminals are closed (app runs with nohup).
+import httpx as _httpx
+from fastapi import Request as _Request
+from fastapi.responses import Response as _Response
+
+_ZIPKIN_BASE = "http://localhost:7001"
+
+
+@app.get("/telemetry", include_in_schema=False)
+async def telemetry_redirect():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/telemetry/")
+
+
+@app.api_route(
+    "/telemetry/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE"],
+    include_in_schema=False,
+)
+async def zipkin_proxy(path: str, request: _Request):
+    """Reverse-proxy every /telemetry/* request to Zipkin UI on localhost:7001."""
+    url = f"{_ZIPKIN_BASE}/{path}"
+    skip = {"host", "content-length", "transfer-encoding"}
+    fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
+    async with _httpx.AsyncClient(timeout=30) as client:
+        try:
+            resp = await client.request(
+                method=request.method,
+                url=url,
+                headers=fwd_headers,
+                content=await request.body(),
+                params=dict(request.query_params),
+                follow_redirects=True,
+            )
+            resp_headers = {
+                k: v for k, v in resp.headers.items()
+                if k.lower() not in {"transfer-encoding", "connection"}
+            }
+            return _Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=resp_headers,
+            )
+        except _httpx.ConnectError:
+            return _Response(
+                content=b"Zipkin not running. Restart: bash /tmp/start_zipkin.sh",
+                status_code=503,
+            )
+
+
 # ── Simple top-level route ────────────────────────────────────────────────────
 import asyncio
 import threading
