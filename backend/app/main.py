@@ -110,7 +110,7 @@ async def telemetry_redirect():
 
 @app.api_route(
     "/zipkin/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
+    methods=["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"],
     include_in_schema=False,
 )
 async def zipkin_proxy(path: str, request: _Request):
