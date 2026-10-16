@@ -25,9 +25,8 @@ import uvicorn
 # Each backend is (label, base_url). sys1 is localhost; others via LAN port.
 BACKENDS = [
     ("sys1", "http://127.0.0.1:5000"),
-    ("sys2", "http://10.1.75.53:5206"),
-    ("sys3", "http://10.1.75.53:5207"),
-    ("sys4", "http://10.1.75.53:5208"),
+    ("sys2", "http://172.17.0.11:5000"),
+    ("sys3", "http://172.17.0.98:5000"),
 ]
 
 _cycle = itertools.cycle(BACKENDS)

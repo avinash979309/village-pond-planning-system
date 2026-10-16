@@ -29,6 +29,7 @@ from app.api.v1.router import api_router
 from app.services.contour_analysis_service import analyze_contour as _analyze_contour
 from app.services.area_analysis_service import analyze_area as _analyze_area
 from app import redis_cache
+from app import telemetry as _telemetry
 
 app = FastAPI(
     title="Village Pond Planning System API",
@@ -41,6 +42,9 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# ── OpenTelemetry ─────────────────────────────────────────────────────────────
+_telemetry.setup_telemetry(app)
 
 # ── CORS ─────────────────────────────────────────────────────────────────────
 app.add_middleware(
@@ -87,7 +91,15 @@ async def root():
 
 # ── Simple top-level route ────────────────────────────────────────────────────
 import asyncio
-from fastapi import UploadFile
+import threading
+import gc
+from fastapi import UploadFile, HTTPException
+
+# Global lock: only ONE analysis at a time.
+# Cgroup limit = 512 MB. Each analysis peaks ~300 MB.
+# asyncio.wait_for cancels the future but NOT the thread → zombie threads stack
+# up on retries → SIGKILL. Lock prevents concurrent analyses.
+_analysis_lock = threading.Lock()
 
 @app.post(
     "/analyzeContour",
@@ -109,18 +121,22 @@ async def analyze_contour_simple(file: UploadFile):
 
     Simple single-file endpoint — no extra parameters needed.
     """
+    if not _analysis_lock.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Analysis already running. Wait for it to finish and retry.")
+
     file_bytes = await file.read()
     filename   = file.filename or "upload.kml"
 
-    # _analyze_contour is a coroutine that contains CPU-bound + blocking I/O
-    # (scipy, pysheds, subprocess.run). Running it directly on the uvicorn
-    # event loop would freeze the server — no other request can be served
-    # until it finishes (2-4 min).
-    #
-    # We run it in a thread-pool worker with its OWN event loop so:
-    #   1. The uvicorn event loop stays free → other devices can still load pages.
-    #   2. We avoid conflicts with uvloop (asyncio.run in a plain thread creates
-    #      a standard asyncio loop, not uvloop, which is safe).
+    import time
+    from opentelemetry import trace as _trace
+    _span = _trace.get_current_span()
+    _span.set_attribute("analysis.type", "contour_kml")
+    _span.set_attribute("analysis.filename", filename)
+    _span.set_attribute("analysis.file_bytes", len(file_bytes))
+
+    if _telemetry.active_analyses_gauge:
+        _telemetry.active_analyses_gauge.add(1, {"type": "contour"})
+
     def _run_in_thread():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -129,22 +145,36 @@ async def analyze_contour_simple(file: UploadFile):
                 _analyze_contour(
                     file_bytes=file_bytes,
                     filename=filename,
-                    grid_resolution=60,        # 60×60 — 2.8× faster than 100×100, stable on lab machine
+                    grid_resolution=30,        # 30×30 — low memory, stays under 512 MB cgroup limit
                     drainage_threshold_pct=2.0,
                     drainage_buffer_cells=2,
-                    snap_radius_cells=5,
-                    skip_osm=True,             # skip OSM fetch — saves 5-15s, non-critical for results
+                    snap_radius_cells=3,
+                    skip_osm=True,
                 )
             )
         finally:
             loop.close()
             asyncio.set_event_loop(None)
+            gc.collect()
 
+    _t0 = time.perf_counter()
     try:
-        result = await asyncio.wait_for(asyncio.to_thread(_run_in_thread), timeout=90.0)
+        result = await asyncio.wait_for(asyncio.to_thread(_run_in_thread), timeout=120.0)
+        _span.set_attribute("analysis.candidates_found", len(result.get("top_candidates", [])))
+        if _telemetry.analysis_counter:
+            _telemetry.analysis_counter.add(1, {"type": "contour", "status": "success"})
     except asyncio.TimeoutError:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=504, detail="Analysis timed out (>90s). Try a smaller or simpler KML file.")
+        _span.set_attribute("error", True)
+        if _telemetry.analysis_counter:
+            _telemetry.analysis_counter.add(1, {"type": "contour", "status": "timeout"})
+        raise HTTPException(status_code=504, detail="Analysis timed out (>120s). Try a smaller or simpler KML file.")
+    finally:
+        _elapsed = time.perf_counter() - _t0
+        if _telemetry.analysis_duration:
+            _telemetry.analysis_duration.record(_elapsed, {"type": "contour"})
+        if _telemetry.active_analyses_gauge:
+            _telemetry.active_analyses_gauge.add(-1, {"type": "contour"})
+        _analysis_lock.release()
 
     # All candidates (service already delineated catchment for each one)
     candidates = result.get("top_candidates", [])
@@ -255,11 +285,35 @@ async def analyze_area_endpoint(req: AreaRequest):
     Returns pond location, pour point, and catchment area as structured JSON.
     Cache: Redis (24h TTL by bbox key). Falls back to compute if Redis unavailable.
     """
+    import time as _time
+    from opentelemetry import trace as _trace
+    _span = _trace.get_current_span()
+    _span.set_attribute("analysis.type", "bbox_srtm")
+    _span.set_attribute("bbox.west",  req.west)
+    _span.set_attribute("bbox.south", req.south)
+    _span.set_attribute("bbox.east",  req.east)
+    _span.set_attribute("bbox.north", req.north)
+    _span.set_attribute("bbox.area_deg2",
+                        round((req.east - req.west) * (req.north - req.south), 6))
+
     # ── Cache check ────────────────────────────────────────────────────────────
     cached = redis_cache.get(req.west, req.south, req.east, req.north)
     if cached is not None:
+        _span.set_attribute("cache.result", "hit")
+        if _telemetry.cache_hit_counter:
+            _telemetry.cache_hit_counter.add(1)
         cached["_cache"] = "hit"
         return cached
+
+    _span.set_attribute("cache.result", "miss")
+    if _telemetry.cache_miss_counter:
+        _telemetry.cache_miss_counter.add(1)
+
+    if not _analysis_lock.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="Analysis already running. Wait for it to finish and retry.")
+
+    if _telemetry.active_analyses_gauge:
+        _telemetry.active_analyses_gauge.add(1, {"type": "bbox"})
 
     def _run_in_thread():
         loop = asyncio.new_event_loop()
@@ -271,17 +325,33 @@ async def analyze_area_endpoint(req: AreaRequest):
                     south=req.south,
                     east=req.east,
                     north=req.north,
+                    skip_osm=True,  # OSM Overpass fetch spikes memory on large areas, causing OOM kills
                 )
             )
         finally:
             loop.close()
             asyncio.set_event_loop(None)
+            gc.collect()
 
+    _t0 = _time.perf_counter()
     try:
-        result = await asyncio.wait_for(asyncio.to_thread(_run_in_thread), timeout=90.0)
+        result = await asyncio.wait_for(asyncio.to_thread(_run_in_thread), timeout=120.0)
+        _span.set_attribute("analysis.candidates_found",
+                            len(result.get("all_candidates", [])))
+        if _telemetry.analysis_counter:
+            _telemetry.analysis_counter.add(1, {"type": "bbox", "status": "success"})
     except asyncio.TimeoutError:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=504, detail="Analysis timed out (>90s). Draw a smaller rectangle and try again.")
+        _span.set_attribute("error", True)
+        if _telemetry.analysis_counter:
+            _telemetry.analysis_counter.add(1, {"type": "bbox", "status": "timeout"})
+        raise HTTPException(status_code=504, detail="Analysis timed out (>120s). Draw a smaller rectangle and try again.")
+    finally:
+        _elapsed = _time.perf_counter() - _t0
+        if _telemetry.analysis_duration:
+            _telemetry.analysis_duration.record(_elapsed, {"type": "bbox"})
+        if _telemetry.active_analyses_gauge:
+            _telemetry.active_analyses_gauge.add(-1, {"type": "bbox"})
+        _analysis_lock.release()
 
     # ── Cache set (errors logged not raised) ───────────────────────────────────
     redis_cache.set(req.west, req.south, req.east, req.north, result)

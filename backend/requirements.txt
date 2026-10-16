@@ -3,6 +3,14 @@ fastapi>=0.110.0
 uvicorn[standard]>=0.30.0
 python-multipart>=0.0.9      # multipart/form-data file uploads
 
+# ── OpenTelemetry ────────────────────────────────────────────────────────────
+opentelemetry-api>=1.25.0
+opentelemetry-sdk>=1.25.0
+opentelemetry-instrumentation-fastapi>=0.46b0
+opentelemetry-instrumentation-httpx>=0.46b0
+opentelemetry-instrumentation-logging>=0.46b0
+opentelemetry-exporter-otlp-proto-grpc>=1.25.0
+
 # ── Validation / config ─────────────────────────────────────────────────────
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
